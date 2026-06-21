@@ -1,6 +1,6 @@
 # nextbsd-userland
 
-Cross-built **Apple system layer** for NextBSD — the Mach / launchd / configd /
+Cross-built **Darwin system layer** for NextBSD — the Mach / launchd / configd /
 CoreFoundation / IOKit stack and its daemons — built on an Ubuntu host with the
 `nextbsd-kernel-toolchain` clang cross-compiler, exactly like `nextbsd-kernel`
 and `nextbsd-freebsd-compat`. Publishes a rolling `continuous` userland artifact
@@ -8,7 +8,7 @@ that the `nextbsd` ISO assembler ingests.
 
 > **Status: CI workflow scaffold.** This commit is the workflow harness only —
 > container + cross sysroot + buildenv setup, no build/publish. The vendored
-> Apple sources (Tier 0–2), the `build-userland.sh` driver, the cmake cross
+> Darwin sources (Tier 0–2), the `build-userland.sh` driver, the cmake cross
 > toolchains, the build/pack/publish steps, and the license all land in a
 > follow-up **code-drop PR**, reviewed in one pass.
 

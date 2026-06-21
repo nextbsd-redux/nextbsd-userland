@@ -1,6 +1,6 @@
-name: Build NextBSD Userland (Apple system layer)
+name: Build NextBSD Userland (Darwin system layer)
 
-# SCAFFOLD — workflow harness only. Cross-builds the Apple system layer
+# SCAFFOLD — workflow harness only. Cross-builds the Darwin system layer
 # (Mach / launchd / configd / CoreFoundation / IOKit + daemons) on an Ubuntu
 # host with the nextbsd-kernel-toolchain clang cross-compiler, like
 # nextbsd-kernel / nextbsd-freebsd-compat.
@@ -24,6 +24,7 @@ on:
 
 jobs:
   userland:
+    name: userland (${{ matrix.target }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -41,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # (A) Stage the cross SYSROOT from compat's `continuous` base — the
-      #     from-source libc/libsys/headers + /usr/lib/system layout the Apple
+      #     from-source libc/libsys/headers + /usr/lib/system layout the Darwin
       #     stack links against. HARD dependency: userland is downstream of compat.
       - name: Stage sysroot from compat continuous
         env:
@@ -66,7 +67,7 @@ jobs:
 
       # ------------------------------------------------------------------------
       # The build, pack, and publish steps arrive with the code-drop PR:
-      #   (C) Build Apple system layer into /stage   →  ./build-userland.sh
+      #   (C) Build Darwin system layer into /stage  →  ./build-userland.sh
       #   (D) Pack  nextbsd-userland-<arch>.tar.gz
       #   publish job: continuous release + dispatch userland-updated → nextbsd
       # ------------------------------------------------------------------------
