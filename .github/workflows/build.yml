@@ -55,15 +55,22 @@ jobs:
             --output /tmp/base.tar.gz --clobber
           tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
 
-      # (B) Bootstrap the cross toolchain + headers into the buildenv (mirrors
-      #     compat). make.py + /usr/src come from the toolchain image.
-      - name: Bootstrap buildenv (toolchain + includes)
+      # (B) Reuse the toolchain BAKED INTO the image — do NOT rebuild it.
+      #     The nextbsd-kernel-toolchain image bakes `kernel-toolchain`
+      #     (bootstrap-tools + cross-tools + includes) into /usr/obj; nextbsd-kernel
+      #     reuses it via `buildenv` and builds fast. We do the same here instead
+      #     of re-running the slow, redundant world `toolchain _includes` that
+      #     nextbsd-freebsd-compat copies. This step is a smoke check that the
+      #     cross buildenv enters against the baked obj (should be near-instant).
+      #     If a later world/userland component needs build-tools beyond
+      #     kernel-toolchain, the fix is to bake the world `toolchain` into the
+      #     image (helps compat too) — NOT to rebuild it per run.
+      - name: Enter cross buildenv (reuse baked kernel-toolchain)
         run: |
           cd /usr/src
           ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} \
-            WITHOUT_TESTS=yes WITHOUT_MAN=yes \
-            toolchain _includes -j"$(nproc)"
+            buildenv BUILDENV_SHELL='echo BUILDENV-OK reused-baked-toolchain'
 
       # ------------------------------------------------------------------------
       # The build, pack, and publish steps arrive with the code-drop PR:
