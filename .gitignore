@@ -1,0 +1,15 @@
+# Build outputs / staging
+/stage/
+sysroot/
+*.tar.gz
+*.o
+*.so
+*.a
+# MIG / generated stubs
+*-mig/
+*Server.c
+*Server.h
+*User.c
+# CI scratch
+artifacts/
+out/

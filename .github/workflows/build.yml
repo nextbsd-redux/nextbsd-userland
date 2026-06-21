@@ -1,0 +1,74 @@
+name: Build NextBSD Userland (Apple system layer)
+
+# SCAFFOLD — workflow harness only. Cross-builds the Apple system layer
+# (Mach / launchd / configd / CoreFoundation / IOKit + daemons) on an Ubuntu
+# host with the nextbsd-kernel-toolchain clang cross-compiler, like
+# nextbsd-kernel / nextbsd-freebsd-compat.
+#
+# This commit sets up the container + cross sysroot + buildenv only. The
+# actual build step (./build-userland.sh), the pack/upload, and the publish
+# job (continuous release + downstream dispatch) land with the code-drop PR
+# that migrates the Tier 0-2 sources. amd64 + arm64, cross-built on x86_64.
+
+on:
+  repository_dispatch:
+    types: [base-updated]        # from nextbsd-freebsd-compat after its base `continuous` refresh
+  pull_request:
+    paths: ['.github/workflows/build.yml']
+  workflow_dispatch:
+    inputs:
+      fbsd_sha:
+        description: 'Pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
+        required: false
+        default: ''
+
+jobs:
+  userland:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          - target: arm64
+            target_arch: aarch64
+    container:
+      # Same per-arch toolchain image the kernel/compat builds use; provides
+      # the clang cross-compiler at $CROSS_BINDIR and FreeBSD /usr/src for make.py.
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # (A) Stage the cross SYSROOT from compat's `continuous` base — the
+      #     from-source libc/libsys/headers + /usr/lib/system layout the Apple
+      #     stack links against. HARD dependency: userland is downstream of compat.
+      - name: Stage sysroot from compat continuous
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/sysroot"
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-freebsd-compat \
+            --pattern "nextbsd-base-${{ matrix.target }}.tar.gz" \
+            --output /tmp/base.tar.gz --clobber
+          tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
+
+      # (B) Bootstrap the cross toolchain + headers into the buildenv (mirrors
+      #     compat). make.py + /usr/src come from the toolchain image.
+      - name: Bootstrap buildenv (toolchain + includes)
+        run: |
+          cd /usr/src
+          ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
+            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} \
+            WITHOUT_TESTS=yes WITHOUT_MAN=yes \
+            toolchain _includes -j"$(nproc)"
+
+      # ------------------------------------------------------------------------
+      # The build, pack, and publish steps arrive with the code-drop PR:
+      #   (C) Build Apple system layer into /stage   →  ./build-userland.sh
+      #   (D) Pack  nextbsd-userland-<arch>.tar.gz
+      #   publish job: continuous release + dispatch userland-updated → nextbsd
+      # ------------------------------------------------------------------------
+      - name: Scaffold sentinel
+        run: echo "nextbsd-userland scaffold OK — build step + publish land with the code-drop PR"
