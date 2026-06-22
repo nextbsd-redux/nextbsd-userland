@@ -45,23 +45,25 @@ build_host_tools() {
     if command -v makefs >/dev/null 2>&1 && command -v mkimg >/dev/null 2>&1; then
         log "makefs/mkimg already on PATH"; return
     fi
-    log "host-building makefs + mkimg from $SRC (build-tools bootstrap)"
-    mkdir -p "$TOOLS"
-    # Build the legacy/bootstrap host tools (libnetbsd etc.) + makefs + mkimg.
-    # make.py drives a buildenv that produces HOST binaries under WORLDTMP/legacy.
-    ( cd "$SRC" && ./tools/build/make.py \
+    : "${CROSS_BINDIR:?CROSS_BINDIR must be set (the kernel-toolchain image provides it)}"
+    log "host-building makefs + mkimg via the _legacy stage (LOCAL_LEGACY_DIRS), like migcom"
+    # _legacy runs the FreeBSD legacy host build (BMAKE = the runner's gcc): it
+    # builds the legacy host libs (libnetbsd/libsbuf/libutil shims) plus the
+    # listed dirs into ${WORLDTMP}/legacy as runner-native (x86_64-Linux) binaries.
+    # makefs/mkimg already live in the baked /usr/src (usr.sbin/makefs, usr.bin/mkimg)
+    # so no copy is needed — just add them to LOCAL_LEGACY_DIRS. make.py needs the
+    # external cross toolchain via --cross-bindir even for the host/legacy build.
+    ( cd "$SRC" && ./tools/build/make.py --cross-bindir="$CROSS_BINDIR" \
         TARGET="$ARCH" TARGET_ARCH="$TARGET_ARCH" \
-        -j"$(nproc)" \
-        bootstrap-tools >/dev/null ) || true
-    # Locate the freshly built host binaries (WORLDTMP legacy/bin tree).
-    WT="$(cd "$SRC" && ./tools/build/make.py TARGET="$ARCH" TARGET_ARCH="$TARGET_ARCH" -V WORLDTMP 2>/dev/null | tail -1)"
-    for t in makefs mkimg; do
-        b="$(find "${WT:-/usr/obj}" -type f -name "$t" -perm -u+x 2>/dev/null | head -1)"
-        [ -n "$b" ] && install -m755 "$b" "$TOOLS/$t" || echo "WARN: host $t not found" >&2
-    done
+        LOCAL_LEGACY_DIRS="usr.sbin/makefs usr.bin/mkimg" \
+        _legacy )
+    mkdir -p "$TOOLS"
+    mfs="$(find /usr/obj -path '*/legacy/usr/sbin/makefs' -type f 2>/dev/null | head -1)"
+    mki="$(find /usr/obj -path '*/legacy/usr/bin/mkimg'  -type f 2>/dev/null | head -1)"
+    [ -n "$mfs" ] && install -m755 "$mfs" "$TOOLS/makefs" || { echo "ERROR: _legacy produced no makefs" >&2; exit 1; }
+    [ -n "$mki" ] && install -m755 "$mki" "$TOOLS/mkimg"  || { echo "ERROR: _legacy produced no mkimg"  >&2; exit 1; }
     export PATH="$TOOLS:$PATH"
-    command -v makefs >/dev/null && command -v mkimg >/dev/null || {
-        echo "ERROR: makefs/mkimg host build failed — Phase 1 iteration point" >&2; exit 1; }
+    log "host tools: $(command -v makefs) | $(command -v mkimg)"
 }
 
 # ---------------------------------------------------------------------------
