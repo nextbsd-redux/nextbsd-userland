@@ -50,8 +50,10 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 .endif
 
 LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -ldispatch \
-		-lsystem_kernel -lpthread -lBlocksRuntime -lbsm -lz
+		-lsystem_kernel -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread bsm z
 .include <bsd.prog.mk>

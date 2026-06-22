@@ -77,9 +77,11 @@ CFLAGS+=	-fconstant-cfstrings		# CFSTR() literal -> CFStringRef
 # (libicucore.so symlink would also work).
 LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
-		-lpthread -lutil -lBlocksRuntime \
-		-ledit		# readline-compat layer for the interactive REPL
+	 -l:libBlocksRuntime.so \
+			# readline-compat layer for the interactive REPL
 
 BINDIR=		/bin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread util edit
 .include <bsd.prog.mk>

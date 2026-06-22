@@ -55,7 +55,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 .endif
 
 LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -ldispatch \
-		-lsystem_kernel -lpthread -lBlocksRuntime -lbsm
+		-lsystem_kernel -l:libBlocksRuntime.so
 
 BINDIR=		/usr/bin
 
@@ -66,4 +66,6 @@ procinfo_freebsd.pieo: ${.CURDIR}/procinfo_freebsd.c
 	${CC} -fpie -DPIC -O2 -pipe -fPIE -g -gz=zlib -std=gnu17 \
 	    -fstack-protector-strong -c ${.ALLSRC} -o ${.TARGET}
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread bsm
 .include <bsd.prog.mk>

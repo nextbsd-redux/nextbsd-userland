@@ -58,8 +58,10 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # Previously satisfied by libxpc's vendored BST copy; libxpc no longer
 # ships those symbols.
 LDADD+=		-lnotify -lsystem_asl -llaunch -lxpc -ldispatch -lsystem_kernel \
-		-lpthread -lBlocksRuntime -lbsm
+	 -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread bsm
 .include <bsd.prog.mk>

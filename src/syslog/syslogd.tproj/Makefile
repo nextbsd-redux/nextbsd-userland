@@ -53,7 +53,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 .endif
 
 LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -ldispatch -lsystem_kernel \
-		-lpthread -lBlocksRuntime -lbsm -lz -lexecinfo
+	 -l:libBlocksRuntime.so
 
 # Re-use notifyd's stub file — it covers most Apple-private link symbols
 # both daemons share (audit_token_to_*, sandbox_check_by_audit_token,
@@ -63,4 +63,6 @@ SRCS+=		notifyd_stubs.c
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread bsm z execinfo
 .include <bsd.prog.mk>
