@@ -107,6 +107,11 @@ void		 nvlist_destroy(nvlist_t *nvl);
 int		 nvlist_error(const nvlist_t *nvl);
 bool		 nvlist_empty(const nvlist_t *nvl);
 int		 nvlist_flags(const nvlist_t *nvl);
+/* libxpc port addition: expose the nvlist's own type tag (nvl_type), used by
+ * xpc_dictionary.c/xpc_array.c to distinguish DICTIONARY vs ARRAY backing
+ * nvlists. Defined in subr_nvlist.c; declared here so callers including <nv.h>
+ * see the prototype (else -Werror=implicit-function-declaration on releng/15.1). */
+int		 nvlist_type(const nvlist_t *nvl);
 void		 nvlist_set_error(nvlist_t *nvl, int error);
 
 nvlist_t *nvlist_clone(const nvlist_t *nvl);
