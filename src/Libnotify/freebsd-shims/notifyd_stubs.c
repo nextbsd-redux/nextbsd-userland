@@ -169,8 +169,7 @@ void os_release(void *obj) { (void)obj; }
 
 /* voucher_mach_msg_adopt / revert — voucher inheritance for sync
  * MIG calls. We don't have vouchers; no-op. */
-typedef mach_port_t voucher_mach_msg_state_t_local;
-voucher_mach_msg_state_t_local
+voucher_mach_msg_state_t
 voucher_mach_msg_adopt(mach_msg_header_t *msg)
 {
 	(void)msg;
@@ -178,7 +177,7 @@ voucher_mach_msg_adopt(mach_msg_header_t *msg)
 }
 
 void
-voucher_mach_msg_revert(voucher_mach_msg_state_t_local state)
+voucher_mach_msg_revert(voucher_mach_msg_state_t state)
 {
 	(void)state;
 }

@@ -624,6 +624,11 @@ typedef union {
 #endif
 
 typedef mach_port_t voucher_mach_msg_state_t;
+/* MIG-generated server demuxes (e.g. asl_ipcServer.c) call these for voucher
+ * inheritance on sync routines. Stubbed in Libnotify/freebsd-shims/notifyd_stubs.c
+ * (no vouchers on FreeBSD); declared here so every MIG server sees the prototype. */
+extern voucher_mach_msg_state_t voucher_mach_msg_adopt(mach_msg_header_t *msg);
+extern void voucher_mach_msg_revert(voucher_mach_msg_state_t state);
 
 /* MAX_TRAILER_SIZE — largest possible Mach message trailer size.
  * Apple defines as 116; matches their <mach/message.h>. */
