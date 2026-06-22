@@ -58,6 +58,10 @@
 
 mach_port_t current_task(void);
 pid_t       audit_token_to_pid(audit_token_t atoken);
+uid_t       audit_token_to_euid(audit_token_t atoken);
+gid_t       audit_token_to_egid(audit_token_t atoken);
+int         sandbox_check_by_audit_token(audit_token_t target, const char *op, int filter, ...);
+int         pthread_setugid_np(uid_t uid, gid_t gid);
 void        xpc_event_publisher_set_error_handler(void *publisher, void *handler);
 void        xpc_event_publisher_set_throttling(void *publisher, uint64_t interval);
 /* reboot_np(RB_PANIC, msg): notifyd's jetsam-panic path; FreeBSD has no jetsam,

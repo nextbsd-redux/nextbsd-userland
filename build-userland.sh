@@ -560,12 +560,6 @@ sync_sysroot
 test -f "$DESTDIR/usr/lib/system/libnotify.so.1" || { echo "FAIL: libnotify.so.1 not installed"; exit 1; }
 echo "==> NOTIFY-LIB-OK"
 
-comp "notifyd"
-mkdir -p "$DESTDIR/usr/sbin"
-run_buildenv "make -C $SRC/Libnotify/notifyd DESTDIR=$DESTDIR SYSROOT=$SYSROOT MIGOUT=$LIBNOTIFY_MIG all install"
-test -x "$DESTDIR/usr/sbin/notifyd" || { echo "FAIL: /usr/sbin/notifyd not installed"; exit 1; }
-echo "==> NOTIFYD-BUILD-OK"
-
 # ---- ASL / syslog stack -----------------------------------------------------
 # build.sh ~2179-2295. Generate asl_ipc MIG stubs (host mig); build
 # libsystem_asl (lib) + syslogd + aslmanager + syslog(1) (progs), all against
@@ -590,6 +584,13 @@ sync_sysroot
 test -f "$DESTDIR/usr/lib/system/libsystem_asl.so.1" || { echo "FAIL: libsystem_asl.so.1 not installed"; exit 1; }
 test -f "$DESTDIR/usr/include/asl.h" || { echo "FAIL: /usr/include/asl.h not installed"; exit 1; }
 echo "==> ASL-LIB-OK"
+
+# notifyd builds AFTER libsystem_asl — it links -lnotify AND -lsystem_asl.
+comp "notifyd"
+mkdir -p "$DESTDIR/usr/sbin"
+run_buildenv "make -C $SRC/Libnotify/notifyd DESTDIR=$DESTDIR SYSROOT=$SYSROOT MIGOUT=$LIBNOTIFY_MIG all install"
+test -x "$DESTDIR/usr/sbin/notifyd" || { echo "FAIL: /usr/sbin/notifyd not installed"; exit 1; }
+echo "==> NOTIFYD-BUILD-OK"
 
 comp "syslogd"
 mkdir -p "$DESTDIR/usr/sbin"
