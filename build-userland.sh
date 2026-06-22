@@ -289,8 +289,23 @@ sync_sysroot() {
 comp "libdispatch [cmake cross]"
 DISPATCH_BUILD="$ROOT/.build/libdispatch-$T"
 rm -rf "$DISPATCH_BUILD"; mkdir -p "$DISPATCH_BUILD"
+# libdispatch's src/CMakeLists.txt does its OWN MIG step at configure time:
+#   find_program(MIG_EXECUTABLE mig PATHS /usr/bin ... REQUIRED)
+#   ... COMMAND ${MIG_EXECUTABLE} -I/usr/include ... protocol.defs
+# We build migcom build-only (no `mig` on PATH), and its -I/usr/include can't see
+# our mach .defs (they're in the sysroot). Hand CMake a `mig` wrapper that bakes
+# in MIGCOM/MIGCC and prepends -I$SYSROOT/usr/include so <mach/*.defs> resolve.
+MIG_BIN="$ROOT/.build/mig-bin"
+mkdir -p "$MIG_BIN"
+cat > "$MIG_BIN/mig" <<EOF
+#!/bin/sh
+export MIGCOM="$MIGCOM" MIGCC="$MIGCC"
+exec /bin/sh "$MIG_SH" -I"$SYSROOT/usr/include" "\$@"
+EOF
+chmod +x "$MIG_BIN/mig"
 cmake -G Ninja -S "$SRC/libdispatch" -B "$DISPATCH_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
+    -DMIG_EXECUTABLE="$MIG_BIN/mig" \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_INSTALL_LIBDIR=lib/system \
     -DINSTALL_DISPATCH_HEADERS_DIR=/usr/include/dispatch \
