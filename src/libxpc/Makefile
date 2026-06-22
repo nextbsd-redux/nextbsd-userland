@@ -60,6 +60,7 @@ LDADD+=		-L${SYSROOT}${PREFIX}/lib/system
 .endif
 NO_MAN=		yes
 WARNS?=		0	# vendored code; don't gate on style warnings
+CFLAGS+=	-Wno-error=implicit-function-declaration	# TEMP: enumerate all implicit decls in one build
 
 INCS=		xpc/activity.h \
 		xpc/base.h \
