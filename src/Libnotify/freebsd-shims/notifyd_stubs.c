@@ -85,6 +85,17 @@ current_task(void)
 	return mach_task_self();
 }
 
+/* reboot_np — Apple's reboot-with-message. notifyd calls reboot_np(RB_PANIC, ...)
+ * from its jetsam memory-limit path; FreeBSD has no jetsam, so this is never
+ * reached in practice. Log and abort (the "panic" intent) rather than reboot. */
+void
+reboot_np(int howto, const char *msg)
+{
+	(void)howto;
+	fprintf(stderr, "reboot_np: %s\n", msg ? msg : "(null)");
+	abort();
+}
+
 /*
  * mach_port_construct / mach_port_destruct are now provided by
  * libmach (src/libmach/mach_traps.c, declared in <mach/message.h>
