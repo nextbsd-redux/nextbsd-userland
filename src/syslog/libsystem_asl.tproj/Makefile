@@ -15,7 +15,7 @@ LIB=		system_asl
 SHLIB_MAJOR=	1
 
 WARNS?=		0
-CFLAGS+=	-Wno-error=implicit-function-declaration	# TEMP: enumerate
+CFLAGS+=	-include ${.CURDIR}/src/asl_stubs.h	# prototypes for asl_stubs.c os_*/mbr stubs
 NO_MAN=		yes
 
 SRCS=		asl.c \
