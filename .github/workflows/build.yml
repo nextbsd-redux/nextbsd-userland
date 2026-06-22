@@ -194,6 +194,91 @@ jobs:
           name: boot-log
           path: tests/boot.log
 
+  # --- Phase 1: native Linux image assembly (no FreeBSD VM) ---------------
+  # pkgdemon.github.io/nextbsd-native-image-assembly-plan.html. Assemble a
+  # minimal bootable .img on the runner from the four cross-built artifacts
+  # (ingesting the userland tarball instead of rebuilding it in a VM), then
+  # boot it. Runs ALONGSIDE smoke-test so we can compare; does not gate
+  # publish. amd64 only for now (arm64 is Phase 4).
+  assemble-image:
+    name: assemble-image (native Linux, no VM)
+    needs: userland
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download this run's userland artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nextbsd-userland-amd64
+          path: art
+      - name: Download base / kernel / modules continuous artifacts
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          gh release download continuous -R nextbsd-redux/nextbsd-freebsd-compat \
+            --pattern 'nextbsd-base-amd64.tar.gz' --dir art --clobber
+          gh release download continuous -R nextbsd-redux/nextbsd-kernel \
+            --pattern 'nextbsd-kernel-amd64.tar.gz' --dir art --clobber
+          gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+            --pattern '*kext*.tar.gz' --dir art --clobber || true
+      - name: Fetch overlay from nextbsd (Phase 1 — not yet vendored)
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/nextbsd-redux/nextbsd.git" nbsd
+          cp -aR nbsd/overlays overlay
+      - name: Assemble disk.img
+        env:
+          ARCH: amd64
+          BASE_TGZ: ${{ github.workspace }}/art/nextbsd-base-amd64.tar.gz
+          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-amd64.tar.gz
+          USERLAND_TGZ: ${{ github.workspace }}/art/nextbsd-userland-amd64.tar.gz
+          OVERLAY: ${{ github.workspace }}/overlay
+          WORK: ${{ github.workspace }}/nbimg
+        run: |
+          chmod +x ci/assemble-image.sh
+          export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          ./ci/assemble-image.sh
+      - name: Upload native-assembled image
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextbsd-ci-image-amd64
+          path: nbimg/out/disk.img
+
+  ci-image-boot:
+    name: ci-image-boot (qemu, native-assembled .img)
+    needs: assemble-image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nextbsd-ci-image-amd64
+          path: .
+      - name: Install qemu + expect + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+      - name: Fetch nextbsd boot test
+        run: |
+          mkdir -p tests
+          curl -fsSL https://raw.githubusercontent.com/nextbsd-redux/nextbsd/main/tests/boot-test.sh \
+            -o tests/boot-test.sh
+          chmod +x tests/boot-test.sh
+      - name: Boot test (native-assembled image)
+        run: ./tests/boot-test.sh disk.img
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-image-boot-log
+          path: tests/boot.log
+
   publish:
     needs: userland
     if: github.ref == 'refs/heads/main'
