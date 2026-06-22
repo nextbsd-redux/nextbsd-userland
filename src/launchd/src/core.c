@@ -80,6 +80,7 @@
 #include <glob.h>
 #include <System/sys/spawn.h>
 #include <System/sys/spawn_internal.h>
+#include <System/sys/fileport.h>	/* fileport_makefd/makeport stubs (freebsd-shims) */
 #include <spawn.h>
 #include <spawn_private.h>
 #include <time.h>
@@ -6648,6 +6649,8 @@ job_setup_exception_port(job_t j, task_t target_task)
 	f = x86_THREAD_STATE;
 #elif defined(__arm__)
 	f = ARM_THREAD_STATE;
+#elif defined(__aarch64__)
+	f = ARM_THREAD_STATE64;
 #else
 #error "unknown architecture"
 #endif
