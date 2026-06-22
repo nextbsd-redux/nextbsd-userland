@@ -981,10 +981,12 @@ process_message(asl_msg_t *msg, uint32_t source)
 		uid_t uid = -2;
 		FILE *_d = fopen("/tmp/process_msg.log", "a");
 		if (_d) { fprintf(_d, "[%d] process_message INLINE source=%u\n", getpid(), source); fclose(_d); }
+		fprintf(stderr, "[%d] PM: inline enter src=%u; before aslmsg_verify\n", getpid(), source); fflush(stderr);
 
 		status = aslmsg_verify(msg, source, &kplevel, &uid);
 		_d = fopen("/tmp/process_msg.log", "a");
 		if (_d) { fprintf(_d, "[%d]   aslmsg_verify -> %u\n", getpid(), status); fclose(_d); }
+		fprintf(stderr, "[%d] PM: aslmsg_verify=%u\n", getpid(), status); fflush(stderr);
 		if (status == VERIFY_STATUS_OK)
 		{
 			if ((source == SOURCE_KERN) && (kplevel >= 0))
@@ -997,9 +999,11 @@ process_message(asl_msg_t *msg, uint32_t source)
 				notify_post(kern_notify_key[kplevel]);
 			}
 			if ((uid == 0) && is_control) control_message(msg);
+			fprintf(stderr, "[%d] PM: before asl_out_message\n", getpid()); fflush(stderr);
 			asl_out_message(msg, msize);
 			_d = fopen("/tmp/process_msg.log", "a");
 			if (_d) { fprintf(_d, "[%d]   asl_out_message returned\n", getpid()); fclose(_d); }
+			fprintf(stderr, "[%d] PM: after asl_out_message\n", getpid()); fflush(stderr);
 		}
 		else
 		{

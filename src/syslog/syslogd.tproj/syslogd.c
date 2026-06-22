@@ -449,7 +449,7 @@ write_boot_log(int first)
 	struct utmpx utx;
 
 	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps. */
-#define _WBL(tag) fprintf(stderr, "[%d] wbl: " tag "\n", getpid())
+#define _WBL(tag) do { fprintf(stderr, "[%d] wbl: " tag "\n", getpid()); fflush(stderr); } while(0)
 
 	_WBL("enter");
 
