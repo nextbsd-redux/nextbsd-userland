@@ -32,6 +32,12 @@
 
 #include "libnotify.h"
 
+/* Soft-fault reporters (defined in freebsd-shims/{notifyd_stubs,fileport_stub}.c).
+ * Declared here so notify_client.c sees prototypes via the CRASH macros below
+ * (else -Werror=implicit-function-declaration on releng/15.1). */
+void OS_BUG_INTERNAL(unsigned long code, const char *subsystem, const char *msg);
+void OS_BUG_CLIENT(unsigned long code, const char *subsystem, const char *msg);
+
 #define NOTIFY_INTERNAL_CRASH(c, x) OS_BUG_INTERNAL(c, "LIBNOTIFY", x)
 #define NOTIFY_CLIENT_CRASH(c, x)   OS_BUG_CLIENT(c, "LIBNOTIFY", x)
 

@@ -136,11 +136,14 @@ _simple_asl_log(int level, const char *facility, const char *message)
 	(void)level; (void)facility; (void)message;
 }
 
-/* OS_BUG_INTERNAL — a "soft bug" marker function from os/log. */
+/* OS_BUG_INTERNAL — a "soft bug" marker (os/log). Signature matches the
+ * NOTIFY_INTERNAL_CRASH(code, msg) -> OS_BUG_INTERNAL(code, "LIBNOTIFY", msg)
+ * macro (same shape as OS_BUG_CLIENT), not the printf-like form it had before
+ * (which would int->const char* convert the code arg). */
 void
-OS_BUG_INTERNAL(const char *fmt, ...)
+OS_BUG_INTERNAL(unsigned long code, const char *subsystem, const char *msg)
 {
-	(void)fmt;
+	(void)code; (void)subsystem; (void)msg;
 }
 
 /*
