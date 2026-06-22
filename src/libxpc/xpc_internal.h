@@ -185,6 +185,15 @@ __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
 /* Defined in xpc_connection.c; declared here so xpc_misc.c's release path sees
  * the prototype (else -Werror=implicit-function-declaration on releng/15.1). */
 __private_extern__ void xpc_connection_destroy(xpc_connection_t object);
+/* vproc transaction stubs (stubs.c) — declared so xpc_connection.c's transaction
+ * guard sees prototypes (else -Werror=implicit-function-declaration on
+ * releng/15.1; vproc_transaction_begin returns a pointer, so an implicit int
+ * decl would truncate it). void* typedefs match stubs.c, which doesn't include
+ * this header, so there's no typedef clash. */
+typedef void *vproc_t;
+typedef void *vproc_transaction_t;
+vproc_transaction_t vproc_transaction_begin(vproc_t vp);
+void vproc_transaction_end(vproc_t vp, vproc_transaction_t txn);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,
     mach_port_t local, uint64_t id);
 __private_extern__ int xpc_pipe_receive(mach_port_t local, mach_port_t *remote,
