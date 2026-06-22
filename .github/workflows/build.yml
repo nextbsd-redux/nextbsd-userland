@@ -55,6 +55,16 @@ jobs:
             --output /tmp/base.tar.gz --clobber
           tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
 
+      # (A2) Host build deps the toolchain image doesn't ship. The kernel/compat
+      #      cross-builds never use CMake, so the kernel-toolchain image lacks
+      #      cmake/ninja — but the two CMake components (libdispatch,
+      #      swift-foundation-icu) need them on the BUILD host. bison/flex/gcc/
+      #      bmake are already in the image. (Future: bake these into the image.)
+      - name: Install host build deps (cmake/ninja for the CMake components)
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends cmake ninja-build
+
       # (B) Cross-build Tiers 0-2 into /stage. build-userland.sh enters
       #     `make.py buildenv` per component (reusing the baked kernel-toolchain
       #     — no rebuild) and owns the dependency order.

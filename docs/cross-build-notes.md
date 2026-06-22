@@ -24,6 +24,13 @@ would clobber the cross-tools), and **collapse `SYSROOT → ${WORLDTMP}`**. Then
 - `sync_sysroot` mirrors each built lib `DESTDIR → SYSROOT(=WORLDTMP)` so the
   next component links/includes the previous tier.
 
+## Host build deps (on the build host / image)
+
+`bison`, `flex`, `cc` (gcc), `bmake` are in the toolchain image. **`cmake` +
+`ninja`** are NOT (kernel/compat don't use CMake) — the workflow `apt-get`s them
+before building; a local builder must install them too. They're needed only for
+the two CMake components (libdispatch, swift-foundation-icu).
+
 ## migcom (Tier 0) — host code generator
 
 migcom turns `.defs` into C and must run **on the build host**. Built the
