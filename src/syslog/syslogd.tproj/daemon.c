@@ -403,6 +403,7 @@ aslmsg_verify(asl_msg_t *msg, uint32_t source, int32_t *kern_post_level, uid_t *
 	asl_msg_set_key_val(msg, ASL_KEY_LEVEL, buf);
 
 
+	fprintf(stderr, "[%d] AV: pid=%d; before kern_quota_check\n", getpid(), pid); fflush(stderr);
 	/* check kernel quota if enabled and no processes are watching */
 	if ((pid == 0) && (global.mps_limit > 0) && (global.watchers_active == 0))
 	{
@@ -421,6 +422,7 @@ aslmsg_verify(asl_msg_t *msg, uint32_t source, int32_t *kern_post_level, uid_t *
 		}
 	}
 
+	fprintf(stderr, "[%d] AV: before asl_core_parse_time\n", getpid()); fflush(stderr);
 	tick = 0;
 	val = asl_msg_get_val_for_key(msg, ASL_KEY_TIME);
 	if (val != NULL) tick = asl_core_parse_time(val, NULL);
@@ -432,10 +434,12 @@ aslmsg_verify(asl_msg_t *msg, uint32_t source, int32_t *kern_post_level, uid_t *
 	snprintf(buf, sizeof(buf) - 1, "%llu", (unsigned long long) tick);
 	asl_msg_set_key_val(msg, ASL_KEY_TIME, buf);
 
+	fprintf(stderr, "[%d] AV: before whatsmyhostname (host)\n", getpid()); fflush(stderr);
 	/* Host */
 	val = asl_msg_get_val_for_key(msg, ASL_KEY_HOST);
 	if (val == NULL) asl_msg_set_key_val(msg, ASL_KEY_HOST, whatsmyhostname());
 
+	fprintf(stderr, "[%d] AV: after host; before uid/gid\n", getpid()); fflush(stderr);
 	/* UID  & GID */
 	uid = -2;
 	val = asl_msg_get_val_for_key(msg, ASL_KEY_UID);
