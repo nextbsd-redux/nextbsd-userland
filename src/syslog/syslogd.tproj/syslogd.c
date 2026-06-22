@@ -326,7 +326,6 @@ launch_config()
 #define _PJ_LC(tag) do { \
 	FILE *_pjf = fopen("/tmp/launch_config.log", "a"); \
 	if (_pjf) { fprintf(_pjf, "[%d] " tag "\n", getpid()); fclose(_pjf); } \
-	fprintf(stderr, "[%d] LC: " tag "\n", getpid()); fflush(stderr); \
 } while(0)
 
 	_PJ_LC("entry");
@@ -449,7 +448,7 @@ write_boot_log(int first)
 	struct utmpx utx;
 
 	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps. */
-#define _WBL(tag) do { fprintf(stderr, "[%d] wbl: " tag "\n", getpid()); fflush(stderr); } while(0)
+#define _WBL(tag) fprintf(stderr, "[%d] wbl: " tag "\n", getpid())
 
 	_WBL("enter");
 
@@ -531,10 +530,7 @@ main(int argc, const char *argv[])
 	 * reliably at /var/log/syslogd.stderr; /tmp is unreliable — a
 	 * fresh fs is mounted over it mid-boot). Defined up-front so the
 	 * pre-init_globals path is traced too. */
-/* fflush so the trail survives a hang: launchd block-buffers our redirected
- * stderr, so without an explicit flush a stall leaves syslogd.stderr empty and
- * the last checkpoint reached is invisible (boot-debug, issue #352). */
-#define _PJ_BC(tag) do { fprintf(stderr, "[%d] PJ: " tag "\n", getpid()); fflush(stderr); } while(0)
+#define _PJ_BC(tag) fprintf(stderr, "[%d] PJ: " tag "\n", getpid())
 
 #if TARGET_OS_SIMULATOR
 	const char *sim_log_dir = getenv("SIMULATOR_LOG_ROOT");
