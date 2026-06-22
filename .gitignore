@@ -6,6 +6,7 @@ sysroot/
 *.so
 *.a
 # MIG / generated stubs
+.mig/
 *-mig/
 *Server.c
 *Server.h
