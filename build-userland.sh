@@ -102,6 +102,18 @@ MIGCC="${MIGCC:-cc}"
 
 export SYSROOT DESTDIR CROSS_BINDIR
 
+# Explicit cross-clang for the few hand-links (ioreg, ipconfig CLI) that build.sh
+# did as a bare `cc`. Mirrors the cmake toolchain files (triple + sysroot + lld),
+# and is run DIRECTLY — NOT via run_buildenv: inside `make.py buildenv` bmake
+# expands `$CC` as `${C}C` ("C: not found"), and the buildenv $CC carries no
+# --target. SYSROOT/CROSS_BINDIR are container paths, reachable here as-is.
+case "$T" in
+    amd64) CROSS_TRIPLE=x86_64-unknown-freebsd ;;
+    arm64) CROSS_TRIPLE=aarch64-unknown-freebsd ;;
+    *)     CROSS_TRIPLE="${TA}-unknown-freebsd" ;;
+esac
+CROSS_CC="$CROSS_BINDIR/clang --target=$CROSS_TRIPLE --ld-path=$CROSS_BINDIR/ld.lld"
+
 # ---- logging helpers ---------------------------------------------------------
 tier()  { echo; echo "############################################################"; \
           echo "## $*"; echo "############################################################"; }
@@ -485,11 +497,11 @@ mkdir -p "$DESTDIR/usr/sbin"
 # -lsystem_kernel -llaunch -lpthread`. Cross-shape: same flags, cross clang +
 # sysroot, --allow-shlib-undefined preserved. TODO verify under cross: if
 # ioreg gains a Makefile, prefer run_buildenv make over this hand link.
-run_buildenv "\$CC -fblocks --sysroot=$SYSROOT \
-    -I$SYSROOT/usr/include -L$SYSROOT/usr/lib/system \
+$CROSS_CC -fblocks --sysroot="$SYSROOT" \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib/system" \
     -Wl,-rpath,/usr/lib/system -Wl,--allow-shlib-undefined \
-    -o $DESTDIR/usr/sbin/ioreg $SRC/libIOKit/ioreg.c \
-    -lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+    -o "$DESTDIR/usr/sbin/ioreg" "$SRC/libIOKit/ioreg.c" \
+    -lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread
 test -x "$DESTDIR/usr/sbin/ioreg" || { echo "FAIL: /usr/sbin/ioreg not installed"; exit 1; }
 needed_check "$DESTDIR/usr/sbin/ioreg" "libIOKit"
 # DROPPED: iokittest/iokitmatchtest/iokitnotify* (host-exec).
@@ -616,14 +628,14 @@ test -x "$DESTDIR/usr/sbin/ipconfigd" || { echo "FAIL: /usr/sbin/ipconfigd not i
 comp "ipconfig(8) CLI"
 # build.sh ~2376-2388 bare `cc` link. Same flags (-Wno-macro-redefined,
 # --allow-shlib-undefined) under the cross clang.  TODO verify under cross.
-run_buildenv "\$CC --sysroot=$SYSROOT \
-    -I$IPCFG_MIG -I$SRC/IPConfiguration \
-    -I$SRC/launchd/liblaunch -I$SRC/launchd/freebsd-shims \
-    -I$SYSROOT/usr/include -L$SYSROOT/usr/lib/system \
+$CROSS_CC --sysroot="$SYSROOT" \
+    -I"$IPCFG_MIG" -I"$SRC/IPConfiguration" \
+    -I"$SRC/launchd/liblaunch" -I"$SRC/launchd/freebsd-shims" \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib/system" \
     -Wno-macro-redefined -Wl,-rpath,/usr/lib/system -Wl,--allow-shlib-undefined \
-    -o $DESTDIR/usr/sbin/ipconfig \
-    $SRC/IPConfiguration/ipconfig.c $IPCFG_MIG/ipconfigUser.c \
-    -llaunch -lsystem_kernel"
+    -o "$DESTDIR/usr/sbin/ipconfig" \
+    "$SRC/IPConfiguration/ipconfig.c" "$IPCFG_MIG/ipconfigUser.c" \
+    -llaunch -lsystem_kernel
 test -x "$DESTDIR/usr/sbin/ipconfig" || { echo "FAIL: /usr/sbin/ipconfig not built"; exit 1; }
 echo "==> ipconfigd + ipconfig built"
 # DROPPED: ipconfigtest/ipconfigrpctest (host-exec).
