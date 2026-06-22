@@ -16,6 +16,7 @@ PROG=		notifyd
 MAN=
 NO_MAN=		yes
 WARNS?=		0
+CFLAGS+=	-Wno-error=implicit-function-declaration	# TEMP: enumerate
 
 SRCS=		notifyd.c \
 		notify_proc.c \
