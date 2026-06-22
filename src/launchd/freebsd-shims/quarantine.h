@@ -77,4 +77,22 @@ qtn_proc_apply_to_self(qtn_proc_t proc)
 	return 1;
 }
 
+/* qtn_proc_set_identifier / qtn_proc_set_flags — syslogd labels its own
+ * quarantine handle before applying it. No Gatekeeper on FreeBSD, so these are
+ * no-ops returning 0 (success); qtn_proc_alloc() returns NULL anyway, so the
+ * caller's path is inert. */
+static __inline int
+qtn_proc_set_identifier(qtn_proc_t proc, const char *identifier)
+{
+	(void)proc; (void)identifier;
+	return 0;
+}
+
+static __inline int
+qtn_proc_set_flags(qtn_proc_t proc, uint32_t flags)
+{
+	(void)proc; (void)flags;
+	return 0;
+}
+
 #endif /* !_QUARANTINE_H_SHIM_ */
