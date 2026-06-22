@@ -96,8 +96,8 @@ LIBDIR=		${PREFIX}/lib/system
 # -ldispatch: the DISPATCH_SOURCE_TYPE_MACH_RECV source behind
 # SCDynamicStoreSetDispatchQueue. -lBlocksRuntime: the dispatch source
 # handlers are blocks (-fblocks).
-LDADD+=		-lCoreFoundation -ldispatch -lBlocksRuntime
-LDADD+=		-lsystem_kernel -llaunch -lpthread
+LDADD+=		-lCoreFoundation -ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_kernel -llaunch
 # SCNetworkReachability.c calls into libdns_sd (DNSServiceQueryRecord
 # against mDNSResponder) but libdns_sd builds AFTER libSC in
 # build.sh's Phase K order, so we cannot link -ldns_sd here. Leave
@@ -110,4 +110,6 @@ LDADD+=		-Wl,-rpath,${PREFIX}/lib/system
 
 PREFIX?=	/usr
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.lib.mk>

@@ -76,8 +76,10 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # header (SCDynamicStoreSetDispatchQueue ABI surface).
 LDADD+=		-llaunch -lsystem_kernel
 LDADD+=		-lSystemConfiguration -lCoreFoundation
-LDADD+=		-ldispatch -lBlocksRuntime -lpthread
+LDADD+=		-ldispatch -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.prog.mk>

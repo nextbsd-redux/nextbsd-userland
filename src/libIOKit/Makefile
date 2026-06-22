@@ -74,11 +74,13 @@ LIBDIR=		${PREFIX}/lib/system
 # the IONotificationPort receive loop. -lpthread: pthread_once for the
 # lazy /dev/ioregistry fd + the IONotificationPort receive thread.
 LDADD+=		-lCoreFoundation -lxpc
-LDADD+=		-ldispatch -lBlocksRuntime
-LDADD+=		-lsystem_kernel -llaunch -lpthread
+LDADD+=		-ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_kernel -llaunch
 LDADD+=		-Wl,--allow-shlib-undefined
 LDADD+=		-Wl,-rpath,${PREFIX}/lib/system
 
 PREFIX?=	/usr
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.lib.mk>

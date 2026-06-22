@@ -13,7 +13,9 @@ CFLAGS+=	-DPRIVATE=1 -D__APPLE_API_PRIVATE
 WARNS=		0
 CFLAGS+=	-Wno-everything
 
-LDADD+=	${KT}/kext.subproj/libkext.a -lCoreFoundation -lIOKit -lz
+LDADD+=	${KT}/kext.subproj/libkext.a -lCoreFoundation -lIOKit
 DPADD+=	${KT}/kext.subproj/libkext.a
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	z
 .include <bsd.prog.mk>

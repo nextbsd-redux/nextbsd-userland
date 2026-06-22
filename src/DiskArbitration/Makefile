@@ -70,9 +70,11 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 #   object model libIOKit's API consumes. -ldispatch + -lBlocksRuntime: the
 #   dispatch queue DA delivers notification callbacks on
 #   (IONotificationPortSetDispatchQueue) + the -fblocks runtime CF/dispatch pull.
-LDADD+=		-llaunch -lsystem_kernel -lpthread
-LDADD+=		-lIOKit -lCoreFoundation -ldispatch -lBlocksRuntime
+LDADD+=		-llaunch -lsystem_kernel
+LDADD+=		-lIOKit -lCoreFoundation -ldispatch -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.prog.mk>

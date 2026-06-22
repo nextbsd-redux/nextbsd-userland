@@ -80,8 +80,8 @@ LDFLAGS+=	-Wl,-rpath,/usr/lib/system
 LDFLAGS+=	-Wl,-z,defs
 .endif
 
-LDADD+=		-lxpc -ldispatch -lsystem_kernel -lpthread -lBlocksRuntime
-LDADD+=		-lbsm		# audit_token_to_au32 from FreeBSD base
+LDADD+=		-lxpc -ldispatch -lsystem_kernel -l:libBlocksRuntime.so
+LDADD+=			# audit_token_to_au32 from FreeBSD base
 LDADD+=		-lnotify	# notify_post / notify_register_* (asl_action.c)
 LDADD+=		-llaunch	# bootstrap_look_up2 / bootstrap_priv
 
@@ -96,4 +96,6 @@ INCS=		include/asl.h \
 		include/asl_object.h
 INCSDIR=	/usr/include
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread bsm
 .include <bsd.lib.mk>

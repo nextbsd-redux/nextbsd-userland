@@ -66,8 +66,10 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 
 # -llaunch: bootstrap_check_in + the bootstrap_port global.
 # -lsystem_kernel: mach_msg and the Mach port syscalls.
-LDADD+=		-llaunch -lsystem_kernel -lpthread
+LDADD+=		-llaunch -lsystem_kernel
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.prog.mk>
