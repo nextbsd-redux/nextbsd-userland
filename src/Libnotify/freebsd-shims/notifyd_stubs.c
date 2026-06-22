@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>	/* fprintf (reboot_np) */
+#include <stdlib.h>	/* abort (reboot_np) */
 
 /* audit_token_to_* — FreeBSD libbsm has audit_token_to_au32 but
  * not these individual extractors. Provide them by calling au32. */
