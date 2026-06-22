@@ -53,10 +53,15 @@ build_host_tools() {
     # libnetbsd/libutil (the kernel needs them) but NOT libsbuf — so first run
     # bootstrap-tools to populate the full build-tool lib set, then the _legacy
     # stage builds + links makefs/mkimg into WORLDTMP/legacy as runner-native bins.
-    log "bootstrap-tools (build-tool libs: libsbuf/libnetbsd/libutil + bootstrap tools)"
-    ( cd "$SRC" && $MKPY -j"$(nproc)" bootstrap-tools ) || true
-    log "_legacy: build + link makefs/mkimg (LOCAL_LEGACY_DIRS), like migcom"
-    ( cd "$SRC" && $MKPY LOCAL_LEGACY_DIRS="usr.sbin/makefs usr.bin/mkimg" _legacy )
+    # makefs links -lsbuf; the baked kernel-toolchain has libnetbsd/libutil in
+    # obj-tools but NOT libsbuf. makefs's link line also searches the general
+    # -L${WORLDTMP}/legacy/usr/lib, so build libsbuf there by listing it FIRST in
+    # LOCAL_LEGACY_DIRS (the legacy stage builds dirs in order), before makefs/mkimg
+    # which then resolve -lsbuf from legacy/usr/lib.
+    log "_legacy: build libsbuf + makefs + mkimg as runner-native host tools"
+    ( cd "$SRC" && $MKPY \
+        LOCAL_LEGACY_DIRS="lib/libsbuf usr.sbin/makefs usr.bin/mkimg" \
+        _legacy )
     mkdir -p "$TOOLS"
     for name in makefs mkimg; do
         b="$(find /usr/obj -type f -name "$name" -perm -u+x 2>/dev/null | head -1)"
