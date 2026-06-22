@@ -182,6 +182,9 @@ __private_extern__ const char *_xpc_get_type_name(xpc_object_t obj);
 __private_extern__ struct xpc_object *nv2xpc(const nvlist_t *nv);
 __private_extern__ nvlist_t *xpc2nv(struct xpc_object *xo);
 __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
+/* Defined in xpc_connection.c; declared here so xpc_misc.c's release path sees
+ * the prototype (else -Werror=implicit-function-declaration on releng/15.1). */
+__private_extern__ void xpc_connection_destroy(xpc_connection_t object);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,
     mach_port_t local, uint64_t id);
 __private_extern__ int xpc_pipe_receive(mach_port_t local, mach_port_t *remote,
