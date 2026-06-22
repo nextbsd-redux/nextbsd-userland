@@ -15,6 +15,7 @@ LIB=		system_asl
 SHLIB_MAJOR=	1
 
 WARNS?=		0
+CFLAGS+=	-Wno-error=implicit-function-declaration	# TEMP: enumerate
 NO_MAN=		yes
 
 SRCS=		asl.c \
