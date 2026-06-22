@@ -92,6 +92,108 @@ jobs:
           name: nextbsd-userland-${{ matrix.target }}
           path: /tmp/nextbsd-userland-${{ matrix.target }}.tar.gz
 
+  # PR-only boot smoke test: overlay THIS PR's userland onto the latest published
+  # NextBSD `continuous` .img and boot it, so we catch a userland change that
+  # breaks boot (launchd as PID 1, the /usr/lib/system dylibs resolving, configd
+  # coming up) before it merges. releng/15.1 is pinned, so the shipped base+kernel
+  # ABI stays stable while only the Darwin userland layer is swapped. Mirrors
+  # nextbsd-kernel's smoke-test, swapping the kernel-binary inject for a userland
+  # tarball overlay. amd64 only (no arm64 image is published yet). Runs ONLY on
+  # pull_request; does NOT gate `publish` or the downstream cascade.
+  smoke-test:
+    name: smoke-test (boot continuous .img with this userland)
+    needs: userland
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # The image (~2G raw) + a FreeBSD VM + qemu need headroom.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      # This run's freshly-built userland (raw tar rooted at /).
+      - name: Download this run's userland artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nextbsd-userland-amd64
+          path: userland-dl
+
+      # Latest CI-gated NextBSD image. Unzip to a raw disk.img we can md-mount.
+      - name: Download nextbsd continuous .img
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          gh release download continuous -R nextbsd-redux/nextbsd \
+            --pattern '*.img.zip' --dir img --clobber
+          MEMBER=$(unzip -Z1 img/*.img.zip | grep -E '\.img$' | head -1)
+          [ -n "$MEMBER" ] || { echo "no .img member in published zip" >&2; exit 1; }
+          unzip -p img/*.img.zip "$MEMBER" > disk.img
+          rm -rf img
+          ls -lh disk.img
+
+      # The root is freebsd-ufs (not writable from Linux), so overlay the userland
+      # inside a FreeBSD VM: md-attach the image, mount the ROOTFS partition,
+      # extract the userland tarball over it, unmount. copyback brings disk.img back.
+      - name: Overlay this userland onto the .img UFS root
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '15.1'
+          usesh: true
+          sync: rsync
+          copyback: true
+          run: |
+            set -eu
+            TARBALL=$(find userland-dl -name 'nextbsd-userland-amd64.tar.gz' | head -1)
+            [ -n "$TARBALL" ] || { echo "no userland artifact" >&2; exit 1; }
+            echo "==> overlaying $TARBALL"
+            md=$(mdconfig -a -t vnode -f disk.img)
+            echo "    md device: $md"
+            gpart show -p "$md"
+            part=$(gpart show -p "$md" | awk '/freebsd-ufs/{print $3; exit}')
+            [ -n "$part" ] || { echo "no freebsd-ufs partition" >&2; exit 1; }
+            echo "    ufs partition: /dev/$part"
+            mkdir -p /mnt-root
+            mount "/dev/$part" /mnt-root
+            tar -C /mnt-root -xzf "$TARBALL"
+            echo "    overlaid libdispatch: $(ls -l /mnt-root/usr/lib/system/libdispatch.so 2>/dev/null || echo MISSING)"
+            echo "    overlaid launchd:     $(ls -l /mnt-root/sbin/launchd 2>/dev/null || echo MISSING)"
+            umount /mnt-root
+            mdconfig -d -u "$md"
+            echo "==> userland overlaid"
+
+      - name: Install qemu + expect + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+
+      # Reuse nextbsd's canonical boot test verbatim (the on-image
+      # /usr/tests/.../run.sh marker suite drives the assertions), fetched from
+      # nextbsd main to stay in sync — same harness the kernel smoke-test uses.
+      - name: Fetch nextbsd boot test
+        run: |
+          mkdir -p tests
+          curl -fsSL https://raw.githubusercontent.com/nextbsd-redux/nextbsd/main/tests/boot-test.sh \
+            -o tests/boot-test.sh
+          chmod +x tests/boot-test.sh
+
+      - name: Boot test (this userland in the continuous .img)
+        run: ./tests/boot-test.sh disk.img
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: tests/boot.log
+
   publish:
     needs: userland
     if: github.ref == 'refs/heads/main'
