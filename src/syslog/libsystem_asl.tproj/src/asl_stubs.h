@@ -12,11 +12,13 @@
 #define _ASL_FREEBSD_STUBS_H_
 
 #include <stdint.h>
+#include <stdarg.h>	/* va_list */
 
 uint64_t os_activity_get_identifier(void *activity, uint64_t *parent_id);
 int      os_log_shim_enabled(void *log);
+/* asl.c passes a va_list (va_copy'd ap) as `args` — must be va_list, not void*. */
 void     os_log_with_args_4syslog(void *log, uint8_t type, const char *format,
-             void *args, void *ret_addr);
+             va_list args, void *ret_addr);
 int      mbr_check_membership(void *user, void *group, int *ismember);
 
 #endif /* !_ASL_FREEBSD_STUBS_H_ */

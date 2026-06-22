@@ -12,6 +12,7 @@
  */
 #include <stdint.h>
 #include <stddef.h>
+#include <stdarg.h>	/* va_list (os_log_with_args_4syslog) */
 
 typedef uint64_t os_activity_id_t;
 typedef void *os_activity_t;
@@ -41,7 +42,7 @@ os_log_shim_enabled(void *log)
  * active. We're not active, but if anyone reaches here just no-op. */
 void
 os_log_with_args_4syslog(void *log, uint8_t type, const char *format,
-    void *args, void *ret_addr)
+    va_list args, void *ret_addr)
 {
 	(void)log; (void)type; (void)format; (void)args; (void)ret_addr;
 }
