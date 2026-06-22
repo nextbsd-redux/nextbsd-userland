@@ -190,10 +190,14 @@ rm -rf /usr/src/usr.bin/migcom /usr/src/libmach
 mkdir -p /usr/src/usr.bin/migcom /usr/src/libmach
 cp -a "$SRC/bootstrap_cmds/migcom.tproj/." /usr/src/usr.bin/migcom/
 cp -a "$SRC/libmach/include" /usr/src/libmach/
+# `_legacy` (not `legacy`) is the exposed top-level target that wraps the legacy
+# stage with WORLDTMP/BMAKE set up. The image's baked kernel-toolchain already
+# ran _legacy, so WORLDTMP/legacy exists and this just adds migcom on top of the
+# baked tools/build (fast) — building it host-native via BMAKE.
 ( cd "$SRCTREE" && ./tools/build/make.py --cross-bindir="$CROSS_BINDIR" \
     TARGET="$T" TARGET_ARCH="$TA" \
     LOCAL_LEGACY_DIRS=usr.bin/migcom \
-    legacy )
+    _legacy )
 # Pull the host-native migcom out of ${WORLDTMP}/legacy and install into our
 # staging so run_mig's MIGCOM=$DESTDIR/usr/libexec/migcom finds it (and it ships).
 MIGCOM_BUILT=$(find /usr/obj -path '*/legacy/usr/libexec/migcom' -type f 2>/dev/null | head -1)
