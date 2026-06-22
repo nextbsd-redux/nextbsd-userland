@@ -34,9 +34,13 @@ set(CMAKE_CXX_COMPILER "${_bindir}/clang++")
 # resolve headers/libs out of the staged sysroot, not the runner's /usr.
 set(CMAKE_C_FLAGS_INIT   "--target=${_triple} --sysroot=${_sysroot}")
 set(CMAKE_CXX_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot}")
-# Carry the target/sysroot into link lines too (clang drives lld).
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "--target=${_triple} --sysroot=${_sysroot}")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot}")
+# Carry the target/sysroot into link lines, and pin lld explicitly — clang does
+# NOT default to lld; the host /usr/bin/ld is x86-only (works for amd64 but wrong
+# for arm64), so use ld.lld (multi-target) for parity with the bsd.mk builds and
+# so the CMake compiler check links cleanly.
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
 
 set(CMAKE_SYSROOT        "${_sysroot}")
 set(CMAKE_FIND_ROOT_PATH "${_sysroot}")
