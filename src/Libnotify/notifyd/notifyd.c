@@ -1447,7 +1447,18 @@ main(int argc, const char *argv[])
 #else
 	dispatch_set_qos_class_fallback(global.mach_channel, QOS_CLASS_BACKGROUND);
 #endif
-	// dispatch_mach_connect happens in XPC_EVENT_PUBLISHER_ACTION_INITIAL_BARRIER
+	// Connect both channels NOW, unconditionally. Apple defers these to the
+	// event publisher's INITIAL_BARRIER, but this build's libxpc has the
+	// xpc_event_publisher_* calls as no-op macros, so that barrier never fires
+	// and the handler block (which holds the connects) is discarded — leaving
+	// the channels inert: no EVFILT_MACHPORT receive is registered, the demux
+	// never runs, and inbound RPCs (e.g. notify_register_check checkin) are
+	// never answered, hanging the client. configd connects+serves eagerly for
+	// the same reason; mirror it here.
+	dispatch_mach_connect(global.mach_notifs_channel, global.mach_notify_port,
+			MACH_PORT_NULL, NULL);
+	dispatch_mach_connect(global.mach_channel, global.server_port,
+			MACH_PORT_NULL, NULL);
 
 	xpc_event_publisher_t publisher = xpc_event_publisher_create("com.apple.notifyd.matching", global.workloop);
 	global.notify_state.event_publisher = publisher;
@@ -1461,12 +1472,10 @@ main(int argc, const char *argv[])
 					notifyd_matching_unregister(event_token);
 					break;
 				case XPC_EVENT_PUBLISHER_ACTION_INITIAL_BARRIER:
-					dispatch_mach_connect(
-							global.mach_notifs_channel, global.mach_notify_port,
-							MACH_PORT_NULL, NULL);
-					dispatch_mach_connect(
-							global.mach_channel, global.server_port,
-							MACH_PORT_NULL, NULL);
+					/* Channels are connected unconditionally at creation (above),
+					 * since this libxpc no-ops the event publisher so this barrier
+					 * never fires. If a real xpc_event_publisher is implemented
+					 * later, drop the unconditional connects to avoid a double-connect. */
 					break;
 				}
 			});
