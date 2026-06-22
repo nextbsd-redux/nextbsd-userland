@@ -240,11 +240,12 @@ export SYSROOT
 # them. bsd.lib.mk does NOT auto-create LIBDIR/INCSDIR/FILESDIR, so pre-make
 # the /usr/lib/system convention dirs (carried verbatim from build.sh).
 #
-# NOTE: build.sh DEFERS installing <mach/mach.h> until just before libxpc
-# (~1115) so libdispatch's CMake __has_include(<mach/mach.h>) doesn't wrongly
-# flip HAVE_MACH. BUT libmach's INCS list (Makefile) includes mach.h, so a
-# plain `install` ships it now. We preserve build.sh's ordering by removing
-# mach.h from the sysroot right after install and re-copying it before libxpc.
+# NOTE: build.sh deferred installing <mach/mach.h> until just before libxpc so
+# libdispatch's CMake __has_include(<mach/mach.h>) wouldn't auto-flip HAVE_MACH.
+# We instead force -DHAVE_MACH=ON, which bypasses that detection entirely — so
+# the deferral is unnecessary AND harmful: with HAVE_MACH=ON, libdispatch's
+# SOURCES (mach_private.h) #include <mach/mach.h> and need it present to compile.
+# So we keep mach.h installed (no removal).
 comp "libmach (libsystem_kernel) — installs mach/* headers into sysroot first"
 mkdir -p "$DESTDIR/usr/lib/system" \
          "$DESTDIR/usr/include/mach" \
@@ -261,8 +262,7 @@ if [ "$SYSROOT" != "$DESTDIR" ]; then
     cp -a "$DESTDIR/usr/lib/system/."        "$SYSROOT/usr/lib/system/" 2>/dev/null || true
     cp -a "$DESTDIR/usr/libdata/pkgconfig/." "$SYSROOT/usr/libdata/pkgconfig/" 2>/dev/null || true
 fi
-# Defer <mach/mach.h> exactly as build.sh does (re-copied before libxpc).
-rm -f "$SYSROOT/usr/include/mach/mach.h" "$DESTDIR/usr/include/mach/mach.h"
+# (mach/mach.h is kept — see note above; HAVE_MACH is forced, not auto-detected.)
 # Apple-convention <servers/bootstrap.h> (build.sh ~874).
 mkdir -p "$DESTDIR/usr/include/servers"
 cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/bootstrap.h"
