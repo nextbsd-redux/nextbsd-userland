@@ -42,8 +42,9 @@ log() { echo "==> $*"; }
 #    incantation is the most likely Phase-1 iteration point; keep it isolated.
 # ---------------------------------------------------------------------------
 build_host_tools() {
-    if command -v makefs >/dev/null 2>&1 && command -v mkimg >/dev/null 2>&1; then
-        log "makefs/mkimg already on PATH"; return
+    if command -v makefs >/dev/null 2>&1 && command -v mkimg >/dev/null 2>&1 \
+       && command -v pwd_mkdb >/dev/null 2>&1 && command -v cap_mkdb >/dev/null 2>&1; then
+        log "makefs/mkimg/pwd_mkdb/cap_mkdb already on PATH"; return
     fi
     : "${CROSS_BINDIR:?CROSS_BINDIR must be set (the kernel-toolchain image provides it)}"
     MKPY="./tools/build/make.py --cross-bindir=$CROSS_BINDIR TARGET=$ARCH TARGET_ARCH=$TARGET_ARCH"
@@ -58,12 +59,16 @@ build_host_tools() {
     # -L${WORLDTMP}/legacy/usr/lib, so build libsbuf there by listing it FIRST in
     # LOCAL_LEGACY_DIRS (the legacy stage builds dirs in order), before makefs/mkimg
     # which then resolve -lsbuf from legacy/usr/lib.
-    log "_legacy: build libsbuf + makefs + mkimg as runner-native host tools"
+    # pwd_mkdb + cap_mkdb join the list: the native image has no FreeBSD VM to
+    # generate /etc/pwd.db,spwd.db (from master.passwd) and /etc/login.conf.db,
+    # so build them host-native too and run them offline in fixup_rootfs. Without
+    # them getpwnam/login can't resolve users and login.conf has no .db.
+    log "_legacy: build libsbuf + makefs + mkimg + pwd_mkdb + cap_mkdb as host tools"
     ( cd "$SRC" && $MKPY \
-        LOCAL_LEGACY_DIRS="lib/libsbuf usr.sbin/makefs usr.bin/mkimg" \
+        LOCAL_LEGACY_DIRS="lib/libsbuf usr.sbin/makefs usr.bin/mkimg usr.sbin/pwd_mkdb usr.bin/cap_mkdb" \
         _legacy )
     mkdir -p "$TOOLS"
-    for name in makefs mkimg; do
+    for name in makefs mkimg pwd_mkdb cap_mkdb; do
         b="$(find /usr/obj -type f -name "$name" -perm -u+x 2>/dev/null | head -1)"
         [ -n "$b" ] && install -m755 "$b" "$TOOLS/$name" \
             || { echo "ERROR: no host $name after bootstrap-tools + _legacy" >&2; exit 1; }
@@ -80,7 +85,8 @@ stage_rootfs() {
     log "staging rootfs at $ROOTFS"
     rm -rf "$ROOTFS"; mkdir -p "$ROOTFS"
     tar -C "$ROOTFS" -xzf "$BASE_TGZ"
-    mkdir -p "$ROOTFS/etc" "$ROOTFS/var" "$ROOTFS/boot/kernel" "$ROOTFS/System/Library/Extensions"
+    apple_private_layout
+    mkdir -p "$ROOTFS/boot/kernel" "$ROOTFS/System/Library/Extensions"
     # kernel -> /boot/kernel/kernel
     tmpk="$WORK/k"; rm -rf "$tmpk"; mkdir -p "$tmpk"; tar -C "$tmpk" -xzf "$KERNEL_TGZ"
     kbin="$(find "$tmpk" -type f -name kernel | head -1)"
@@ -90,8 +96,42 @@ stage_rootfs() {
     for m in ${MODULES_TGZ:-}; do [ -f "$m" ] && tar -C "$ROOTFS/System/Library/Extensions" -xzf "$m"; done
     # Darwin userland (raw tar rooted at /)
     tar -C "$ROOTFS" -xzf "$USERLAND_TGZ"
-    # overlay last
+    # overlay last (its /private/etc config now resolves via the /etc symlink)
     [ -n "${OVERLAY:-}" ] && [ -d "$OVERLAY" ] && cp -aR "$OVERLAY/." "$ROOTFS/"
+    apple_private_runtime
+}
+
+# Apple /private layout (build.sh:107-118): /private/{etc,var,tmp} are the REAL
+# dirs; /etc,/var,/tmp are relative symlinks into them. WITHOUT THIS the overlay's
+# /private/etc (master.passwd, gettytab, login.conf, pam.d) is unreachable via
+# /etc, so getty/login/PAM all fail and the image halts before the login banner.
+apple_private_layout() {
+    mkdir -p "$ROOTFS/private"
+    for pd in etc var tmp; do
+        if [ -d "$ROOTFS/$pd" ] && [ ! -L "$ROOTFS/$pd" ]; then
+            mv "$ROOTFS/$pd" "$ROOTFS/private/$pd"      # relocate if the base shipped it
+        else
+            mkdir -p "$ROOTFS/private/$pd"
+        fi
+        ln -s "private/$pd" "$ROOTFS/$pd"
+    done
+    # launchctl -w job-overrides DB dir (build.sh:118) so launchd loads cleanly.
+    mkdir -p "$ROOTFS/private/var/db/launchd.db/com.apple.launchd"
+}
+
+# /var skeleton + utmpx session files (build.sh:120-138). Without utx.active/
+# utx.log, PAM's pam_open_session fails ("Unable to write the utmp record" ->
+# "system error") and login aborts before execing root's shell. Runs AFTER the
+# overlay; these paths follow the /var -> private/var symlink.
+apple_private_runtime() {
+    mkdir -p "$ROOTFS/var/run" "$ROOTFS/var/log" "$ROOTFS/var/db" \
+             "$ROOTFS/var/empty" "$ROOTFS/var/tmp" "$ROOTFS/tmp" "$ROOTFS/dev"
+    chmod 1777 "$ROOTFS/tmp" "$ROOTFS/var/tmp"
+    : > "$ROOTFS/var/run/utx.active"
+    : > "$ROOTFS/var/log/utx.lastlogin"
+    : > "$ROOTFS/var/log/utx.log"
+    chmod 644 "$ROOTFS/var/run/utx.active" \
+              "$ROOTFS/var/log/utx.lastlogin" "$ROOTFS/var/log/utx.log"
 }
 
 # ---------------------------------------------------------------------------
@@ -107,14 +147,17 @@ fixup_rootfs() {
     if [ -d "$ROOTFS/System/Library/Extensions" ]; then
         chmod -R go-w "$ROOTFS/System/Library/Extensions" || true
     fi
-    # offline passwd / login.conf DBs (host pwd_mkdb/cap_mkdb if available)
-    if [ -f "$ROOTFS/etc/master.passwd" ] && command -v pwd_mkdb >/dev/null 2>&1; then
-        pwd_mkdb -p -d "$ROOTFS/etc" "$ROOTFS/etc/master.passwd" || \
-          echo "WARN: pwd_mkdb failed (bake pwd.db into overlay instead)" >&2
+    # offline passwd / login.conf DBs, generated into the REAL /private/etc (the
+    # /etc symlink resolves there at runtime). host pwd_mkdb/cap_mkdb come from
+    # build_host_tools; x86 host -> little-endian db works for amd64 + arm64.
+    etc="$ROOTFS/private/etc"
+    if [ -f "$etc/master.passwd" ]; then
+        pwd_mkdb -p -d "$etc" "$etc/master.passwd" \
+          || { echo "ERROR: pwd_mkdb failed — login cannot resolve users" >&2; exit 1; }
+    else
+        echo "WARN: no $etc/master.passwd — login will have no users" >&2
     fi
-    if [ -f "$ROOTFS/etc/login.conf" ] && command -v cap_mkdb >/dev/null 2>&1; then
-        cap_mkdb "$ROOTFS/etc/login.conf" || echo "WARN: cap_mkdb failed" >&2
-    fi
+    [ -f "$etc/login.conf" ] && { cap_mkdb "$etc/login.conf" || echo "WARN: cap_mkdb failed" >&2; }
     # bake into the image as uid/gid 0 (mtree manifest re-applies setuid below)
 }
 

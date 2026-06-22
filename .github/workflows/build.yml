@@ -224,13 +224,9 @@ jobs:
             --pattern 'nextbsd-kernel-amd64.tar.gz' --dir art --clobber
           gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
             --pattern '*kext*.tar.gz' --dir art --clobber || true
-      - name: Fetch overlay from nextbsd (Phase 1 — not yet vendored)
-        env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
-        run: |
-          git clone --depth 1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/nextbsd-redux/nextbsd.git" nbsd
-          cp -aR nbsd/overlays overlay
+      # overlay is vendored in-repo at ./overlay (migrated from nextbsd's
+      # overlays/, + the FreeBSD-base /etc defaults the pkg used to supply:
+      # gettytab/ttys/services/protocols). The checkout provides it — no fetch.
       - name: Assemble disk.img
         env:
           ARCH: amd64
