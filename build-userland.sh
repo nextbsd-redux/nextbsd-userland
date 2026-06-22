@@ -421,6 +421,10 @@ tier "TIER 2 : launchd -> configd -> SC -> IOKit -> kext_tools -> notify -> sysl
 # build.sh ~1433-1493. launchd (bsd.prog.mk) consumes the I1a MIG stubs + CF;
 # launchctl links CF/ICU/xpc/dispatch/liblaunch via its Makefile + freebsd-shims.
 comp "launchd daemon (post-CF)"
+# Pre-create install dirs (bsd.prog.mk's install doesn't mkdir BINDIR; no
+# distrib-dirs/hierarchy pass in this piecemeal cross-install). launchd -> /sbin,
+# launchctl -> /bin.
+mkdir -p "$DESTDIR/sbin" "$DESTDIR/bin"
 run_buildenv "make -C $SRC/launchd/src DESTDIR=$DESTDIR MIGOUT=$MIG_OUT SYSROOT=$SYSROOT all install"
 test -x "$DESTDIR/sbin/launchd" || { echo "FAIL: /sbin/launchd not installed"; exit 1; }
 

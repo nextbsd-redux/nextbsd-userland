@@ -75,6 +75,11 @@
 #include "vproc.h"
 #include "vproc_priv.h"
 #include "vproc_internal.h"
+
+/* xpc_domain_server() is the libxpc MIG-demux stub (libxpc/stubs.c); runtime.c's
+ * MIG dispatch fallback calls it. Declared here so the call sees a prototype
+ * (else -Werror=implicit-function-declaration); the symbol resolves via -lxpc. */
+extern boolean_t xpc_domain_server(void *request, void *reply);
 #include "jobServer.h"
 #include "job_reply.h"
 
