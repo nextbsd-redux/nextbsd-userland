@@ -72,6 +72,7 @@ SRCS+=		jobUser.c jobServer.c \
 
 # Vendored Apple source — don't gate on its warnings.
 WARNS?=		0
+CFLAGS+=	-Wno-error=implicit-function-declaration	# TEMP: enumerate
 NO_MAN=		yes
 
 CFLAGS+=	-I${.CURDIR}			# config.h, core.h, launchd.h, ...
