@@ -384,6 +384,7 @@ ICU_BUILD="$ROOT/.build/icu-$T"
 rm -rf "$ICU_BUILD"; mkdir -p "$ICU_BUILD"
 cmake -G Ninja -S "$SRC/swift-foundation-icu" -B "$ICU_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
+    -DFREEBSD_HOST_CC="${HOSTCC:-cc}" \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_INSTALL_LIBDIR=lib/system \
     -DCMAKE_INSTALL_INCLUDEDIR=include \
