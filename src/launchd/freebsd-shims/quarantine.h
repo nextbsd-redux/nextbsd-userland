@@ -56,4 +56,43 @@ qtn_proc_to_data(qtn_proc_t proc, void *buf, size_t *buflen)
 	return 1;
 }
 
+/*
+ * qtn_proc_init_with_data() / qtn_proc_apply_to_self() — core.c's job-spawn
+ * path calls these, but only inside `if (job_assumes(j, qp = qtn_proc_alloc()))`,
+ * and our qtn_proc_alloc() returns NULL, so the branch is dead at runtime. They
+ * must still compile (and be declared, for -Werror=implicit-function-declaration).
+ * Stub to nonzero (failure); never reached on FreeBSD (no Gatekeeper).
+ */
+static __inline int
+qtn_proc_init_with_data(qtn_proc_t proc, const void *data, size_t len)
+{
+	(void)proc; (void)data; (void)len;
+	return 1;
+}
+
+static __inline int
+qtn_proc_apply_to_self(qtn_proc_t proc)
+{
+	(void)proc;
+	return 1;
+}
+
+/* qtn_proc_set_identifier / qtn_proc_set_flags — syslogd labels its own
+ * quarantine handle before applying it. No Gatekeeper on FreeBSD, so these are
+ * no-ops returning 0 (success); qtn_proc_alloc() returns NULL anyway, so the
+ * caller's path is inert. */
+static __inline int
+qtn_proc_set_identifier(qtn_proc_t proc, const char *identifier)
+{
+	(void)proc; (void)identifier;
+	return 0;
+}
+
+static __inline int
+qtn_proc_set_flags(qtn_proc_t proc, uint32_t flags)
+{
+	(void)proc; (void)flags;
+	return 0;
+}
+
 #endif /* !_QUARANTINE_H_SHIM_ */

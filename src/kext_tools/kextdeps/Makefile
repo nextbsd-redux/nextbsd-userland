@@ -24,7 +24,9 @@ CFLAGS+=	-Wno-everything
 # IORegistryEntryCreateCFProperty (__OSKextReadRegistryNumberProperty). It is
 # available because build.sh builds kextdeps (step 3r4a) AFTER libIOKit (3r4).
 # (-lz: OSKext's cache paths use inflate*/gz*.)
-LDADD+=	${KT}/kext.subproj/libkext.a -lCoreFoundation -lIOKit -lz
+LDADD+=	${KT}/kext.subproj/libkext.a -lCoreFoundation -lIOKit
 DPADD+=	${KT}/kext.subproj/libkext.a
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	z
 .include <bsd.prog.mk>

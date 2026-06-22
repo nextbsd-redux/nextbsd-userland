@@ -23,5 +23,8 @@ static inline int qtn_proc_init_with_self(qtn_proc_t qp) { (void)qp; return 0; }
 static inline int qtn_proc_init_with_data(qtn_proc_t qp, const void *d, size_t s) {
 	(void)qp; (void)d; (void)s; return 0;
 }
+/* syslogd labels its quarantine handle before applying it — no-op on FreeBSD. */
+static inline int qtn_proc_set_identifier(qtn_proc_t qp, const char *id) { (void)qp; (void)id; return 0; }
+static inline int qtn_proc_set_flags(qtn_proc_t qp, int flags) { (void)qp; (void)flags; return 0; }
 
 #endif

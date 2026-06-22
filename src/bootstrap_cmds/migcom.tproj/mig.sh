@@ -108,18 +108,19 @@ target=
 iSysRootParm=
 
 files=
-# FreeBSD: /usr/bin/arch doesn't exist, and FreeBSD's clang has no
-# `-arch` driver flag (it's an Apple clang extension). On macOS the
-# cpp pass below runs `cc -E -arch ${arch} ...`; on FreeBSD we drop
-# the -arch flag entirely — the native clang target already predefines
-# the right __x86_64__ / __aarch64__ macros. `arch` is still set (from
-# uname -m) in case an explicit -arch arg or downstream use needs it.
-if [ -x /usr/bin/arch ]; then
+# `-arch` is an Apple-clang-only driver flag; FreeBSD's clang and the host gcc
+# (our cross-build MIGCC on Linux) both reject it. Apple's cpp pass runs
+# `cc -E -arch ${arch} ...`; everywhere else we drop -arch — the target's
+# predefined __x86_64__/__aarch64__ macros already select the right path.
+# Detect macOS explicitly via `uname -s` = Darwin: keying off /usr/bin/arch
+# existence is wrong, because Ubuntu/coreutils ALSO ships /usr/bin/arch (which
+# made `cc -E -arch x86_64` leak into the Linux cross-build). `arch` is still set
+# (uname -m) for any downstream use.
+arch=`/usr/bin/uname -m`
+archflag=
+if [ "`/usr/bin/uname -s`" = "Darwin" ] && [ -x /usr/bin/arch ]; then
   arch=`/usr/bin/arch`
   archflag="-arch ${arch}"
-else
-  arch=`/usr/bin/uname -m`
-  archflag=
 fi
 
 WORKTMP=`/usr/bin/mktemp -d "${TMPDIR:-/tmp}/mig.XXXXXX"`

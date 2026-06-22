@@ -112,9 +112,11 @@ CFLAGS+=	-DAPPLE_ICU_CHANGES=1
 
 LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
-		-lpthread -lutil -lBlocksRuntime \
-		-lm		# floor/fmod/scalbn/ceil pulled in by CF
+	 -l:libBlocksRuntime.so \
+			# floor/fmod/scalbn/ceil pulled in by CF
 
 BINDIR=		/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread util m
 .include <bsd.prog.mk>

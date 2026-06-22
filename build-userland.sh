@@ -92,14 +92,27 @@ CMAKE_TOOLCHAIN="$ROOT/cmake/cross-${T}.cmake"
 # MIG artifact dirs (pure build artifacts; never installed into $DESTDIR).
 MIGROOT="${MIGROOT:-$ROOT/.mig}"
 
-# Host migcom — installed into $DESTDIR by Tier 0, invoked by every MIG step.
-# (mig.sh shells out to $MIGCOM; $MIGCC is the C preprocessor it runs over
-#  .defs — host cc is correct, .defs preprocessing is arch-neutral.)
-MIGCOM="$DESTDIR/usr/libexec/migcom"
+# Host migcom — built by Tier 0 (FreeBSD legacy stage) and used build-only by
+# every MIG step. It is a runner-native (x86_64-Linux) binary, so it is NOT
+# shipped; Tier 0 points MIGCOM at its legacy build location.
+# (mig.sh shells out to $MIGCOM; $MIGCC preprocesses .defs — host cc, arch-neutral.)
+MIGCOM=""   # set by Tier 0 (legacy-built, build-scratch — never shipped)
 MIG_SH="$SRC/bootstrap_cmds/migcom.tproj/mig.sh"
 MIGCC="${MIGCC:-cc}"
 
 export SYSROOT DESTDIR CROSS_BINDIR
+
+# Explicit cross-clang for the few hand-links (ioreg, ipconfig CLI) that build.sh
+# did as a bare `cc`. Mirrors the cmake toolchain files (triple + sysroot + lld),
+# and is run DIRECTLY — NOT via run_buildenv: inside `make.py buildenv` bmake
+# expands `$CC` as `${C}C` ("C: not found"), and the buildenv $CC carries no
+# --target. SYSROOT/CROSS_BINDIR are container paths, reachable here as-is.
+case "$T" in
+    amd64) CROSS_TRIPLE=x86_64-unknown-freebsd ;;
+    arm64) CROSS_TRIPLE=aarch64-unknown-freebsd ;;
+    *)     CROSS_TRIPLE="${TA}-unknown-freebsd" ;;
+esac
+CROSS_CC="$CROSS_BINDIR/clang --target=$CROSS_TRIPLE --ld-path=$CROSS_BINDIR/ld.lld"
 
 # ---- logging helpers ---------------------------------------------------------
 tier()  { echo; echo "############################################################"; \
@@ -171,28 +184,38 @@ mkdir -p "$MIGROOT"
 # =============================================================================
 tier "TIER 0 : migcom + mig wrapper (HOST tool)"
 
-# build.sh ~947-969. migcom's codegen is arch-neutral, so it is built with the
-# runner's host cc (NOT the cross clang) and installed into $DESTDIR so the
-# later MIG steps and the booted image both find /usr/bin/mig + libexec/migcom.
-comp "migcom (host cc)"
-mkdir -p "$DESTDIR/usr/libexec" "$DESTDIR/usr/bin" "$DESTDIR/usr/share/man/man1"
-# migcom must be a RUNNER-native (x86_64) binary so the later MIG steps can
-# exec it in BOTH the amd64 and arm64 jobs. Build it in the FreeBSD buildenv
-# pinned to the host arch (amd64): that supplies FreeBSD bmake + share/mk (the
-# Makefile is `.include <bsd.prog.mk>`, which GNU make can't parse) and yields a
-# native binary. The buildenv's amd64 clang == the runner's native compiler.
+# migcom is a build-time HOST code generator (turns .defs into C). Build it the
+# FreeBSD way — the SAME machinery that bootstraps yacc/lex: stage it into the
+# in-container /usr/src and build it host-native via the `_legacy` stage with
+# LOCAL_LEGACY_DIRS. The legacy loop runs `make obj includes all install
+# DESTDIR=${WORLDTMP}/legacy` with BMAKE (the build host's gcc). Ephemeral,
+# in-container — like the kernel build patching /usr/src. (`_legacy` is the
+# exposed top-level wrapper that sets up WORLDTMP/BMAKE; the baked kernel-toolchain
+# already ran it, so this just adds migcom atop the baked tools/build.)
 #
-# Unset MAKEOBJDIRPREFIX so migcom builds IN-SOURCE (obj dir = source dir), like
-# the original native `make -C migcom.tproj`. With the buildenv's
-# MAKEOBJDIRPREFIX=/usr/obj, bmake builds in a split /usr/obj OBJDIR and loses
-# .PATH back to this out-of-/usr/src dir, so it can't find existing sources
-# (server.c/user.c) → "don't know how to make server.c".
-run_buildenv_host "env -u MAKEOBJDIRPREFIX make -C $SRC/bootstrap_cmds/migcom.tproj DESTDIR=$DESTDIR BINDIR=/usr/libexec MK_MAN=no all install"
-install -m 0755 "$SRC/bootstrap_cmds/migcom.tproj/mig.sh" "$DESTDIR/usr/bin/mig"
-install -m 0644 "$SRC/bootstrap_cmds/migcom.tproj/mig.1"    "$DESTDIR/usr/share/man/man1/mig.1"
-install -m 0644 "$SRC/bootstrap_cmds/migcom.tproj/migcom.1" "$DESTDIR/usr/share/man/man1/migcom.1"
-# build.sh ran `chroot ... mig -version` to smoke it; here migcom is a HOST
-# binary so we CAN run it directly (no chroot, no cross).
+# Placement mirrors the install location: migcom installs to /usr/libexec, so its
+# source dir lives at /usr/src/libexec/migcom (FreeBSD convention). The Makefile's
+# relative -I../../libmach/include then resolves to /usr/src/libmach/include, where
+# we drop our libmach headers.
+#
+# BUILD-ONLY: the result is a runner-native x86_64-Linux binary — it must NOT ship
+# on the FreeBSD ISO (it could not run there). So we do NOT install it into
+# $DESTDIR; we point MIGCOM at its legacy build location for the MIG steps. `mig`
+# is not a base-system runtime dependency — revisit cross-building a TARGET migcom
+# only if we ever want `mig` on the installed system.
+comp "migcom (legacy stage, host-native, build-only)"
+rm -rf /usr/src/libexec/migcom /usr/src/libmach
+mkdir -p /usr/src/libexec/migcom /usr/src/libmach
+cp -a "$SRC/bootstrap_cmds/migcom.tproj/." /usr/src/libexec/migcom/
+cp -a "$SRC/libmach/include" /usr/src/libmach/
+( cd "$SRCTREE" && ./tools/build/make.py --cross-bindir="$CROSS_BINDIR" \
+    TARGET="$T" TARGET_ARCH="$TA" \
+    LOCAL_LEGACY_DIRS=libexec/migcom \
+    _legacy )
+MIGCOM=$(find /usr/obj -path '*/legacy/usr/libexec/migcom' -type f 2>/dev/null | head -1)
+[ -n "$MIGCOM" ] || { echo "FAIL: legacy stage produced no migcom"; exit 1; }
+note "host migcom built (build-only, not shipped): $MIGCOM"
+# Smoke it — host binary, run directly (no chroot/cross).
 MIGCC="$MIGCC" MIGCOM="$MIGCOM" /bin/sh "$MIG_SH" -version \
     || { echo "FAIL: mig -version (host) exited non-zero"; exit 1; }
 note "host migcom installed at $MIGCOM"
@@ -202,17 +225,39 @@ note "host migcom installed at $MIGCOM"
 # =============================================================================
 tier "TIER 1 : libmach -> libdispatch -> libxpc -> liblaunch -> ICU -> CF"
 
+# ---- Populate the cross sysroot (FOUNDATIONAL) ------------------------------
+# The buildenv compiler is invoked with --sysroot=${WORLDTMP} and NO host
+# include/lib fallback (Makefile.inc1 XCFLAGS, :879/:887). The baked
+# kernel-toolchain skips the _includes/_libraries stages
+# (KERNEL_TOOLCHAIN_TGTS = TOOLCHAIN_TGTS:N_obj:N_cleanobj:N_includes:N_libraries),
+# so ${WORLDTMP} has no base headers (sys/types.h, net/*) or libs. Stage the
+# compat-continuous base (the workflow extracted it to $SYSROOT) INTO ${WORLDTMP}
+# and collapse SYSROOT->${WORLDTMP}, so the compiler's --sysroot AND the
+# Makefiles' -I$SYSROOT/-L$SYSROOT resolve against one populated root. Copy only
+# headers+libs (usr/include, usr/lib, lib) — NOT usr/bin/bin/sbin, which would
+# clobber WORLDTMP's cross-tools with FreeBSD-target binaries. DESTDIR stays
+# /stage (clean artifact); sync_sysroot mirrors each built lib back into WORLDTMP.
+WORLDTMP=${MIGCOM%/legacy/usr/libexec/migcom}
+[ -d "$WORLDTMP/usr" ] || { echo "FAIL: could not derive WORLDTMP from MIGCOM=$MIGCOM"; exit 1; }
+echo "==> staging compat base into WORLDTMP=$WORLDTMP; collapsing SYSROOT -> WORLDTMP"
+for d in usr/include usr/lib lib; do
+    [ -d "$SYSROOT/$d" ] && { mkdir -p "$WORLDTMP/$d"; cp -a "$SYSROOT/$d/." "$WORLDTMP/$d/"; }
+done
+SYSROOT="$WORLDTMP"
+export SYSROOT
+
 # ---- libmach (libsystem_kernel) ---------------------------------------------
 # build.sh ~742-774. Installs mach/* headers into the sysroot FIRST — every
 # later component (-I sysroot) and the CMake HAVE_MACH detection depend on
 # them. bsd.lib.mk does NOT auto-create LIBDIR/INCSDIR/FILESDIR, so pre-make
 # the /usr/lib/system convention dirs (carried verbatim from build.sh).
 #
-# NOTE: build.sh DEFERS installing <mach/mach.h> until just before libxpc
-# (~1115) so libdispatch's CMake __has_include(<mach/mach.h>) doesn't wrongly
-# flip HAVE_MACH. BUT libmach's INCS list (Makefile) includes mach.h, so a
-# plain `install` ships it now. We preserve build.sh's ordering by removing
-# mach.h from the sysroot right after install and re-copying it before libxpc.
+# NOTE: build.sh deferred installing <mach/mach.h> until just before libxpc so
+# libdispatch's CMake __has_include(<mach/mach.h>) wouldn't auto-flip HAVE_MACH.
+# We instead force -DHAVE_MACH=ON, which bypasses that detection entirely — so
+# the deferral is unnecessary AND harmful: with HAVE_MACH=ON, libdispatch's
+# SOURCES (mach_private.h) #include <mach/mach.h> and need it present to compile.
+# So we keep mach.h installed (no removal).
 comp "libmach (libsystem_kernel) — installs mach/* headers into sysroot first"
 mkdir -p "$DESTDIR/usr/lib/system" \
          "$DESTDIR/usr/include/mach" \
@@ -229,8 +274,7 @@ if [ "$SYSROOT" != "$DESTDIR" ]; then
     cp -a "$DESTDIR/usr/lib/system/."        "$SYSROOT/usr/lib/system/" 2>/dev/null || true
     cp -a "$DESTDIR/usr/libdata/pkgconfig/." "$SYSROOT/usr/libdata/pkgconfig/" 2>/dev/null || true
 fi
-# Defer <mach/mach.h> exactly as build.sh does (re-copied before libxpc).
-rm -f "$SYSROOT/usr/include/mach/mach.h" "$DESTDIR/usr/include/mach/mach.h"
+# (mach/mach.h is kept — see note above; HAVE_MACH is forced, not auto-detected.)
 # Apple-convention <servers/bootstrap.h> (build.sh ~874).
 mkdir -p "$DESTDIR/usr/include/servers"
 cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/bootstrap.h"
@@ -257,8 +301,23 @@ sync_sysroot() {
 comp "libdispatch [cmake cross]"
 DISPATCH_BUILD="$ROOT/.build/libdispatch-$T"
 rm -rf "$DISPATCH_BUILD"; mkdir -p "$DISPATCH_BUILD"
+# libdispatch's src/CMakeLists.txt does its OWN MIG step at configure time:
+#   find_program(MIG_EXECUTABLE mig PATHS /usr/bin ... REQUIRED)
+#   ... COMMAND ${MIG_EXECUTABLE} -I/usr/include ... protocol.defs
+# We build migcom build-only (no `mig` on PATH), and its -I/usr/include can't see
+# our mach .defs (they're in the sysroot). Hand CMake a `mig` wrapper that bakes
+# in MIGCOM/MIGCC and prepends -I$SYSROOT/usr/include so <mach/*.defs> resolve.
+MIG_BIN="$ROOT/.build/mig-bin"
+mkdir -p "$MIG_BIN"
+cat > "$MIG_BIN/mig" <<EOF
+#!/bin/sh
+export MIGCOM="$MIGCOM" MIGCC="$MIGCC"
+exec /bin/sh "$MIG_SH" -I"$SYSROOT/usr/include" "\$@"
+EOF
+chmod +x "$MIG_BIN/mig"
 cmake -G Ninja -S "$SRC/libdispatch" -B "$DISPATCH_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
+    -DMIG_EXECUTABLE="$MIG_BIN/mig" \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_INSTALL_LIBDIR=lib/system \
     -DINSTALL_DISPATCH_HEADERS_DIR=/usr/include/dispatch \
@@ -337,6 +396,7 @@ ICU_BUILD="$ROOT/.build/icu-$T"
 rm -rf "$ICU_BUILD"; mkdir -p "$ICU_BUILD"
 cmake -G Ninja -S "$SRC/swift-foundation-icu" -B "$ICU_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
+    -DFREEBSD_HOST_CC="${HOSTCC:-cc}" \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_INSTALL_LIBDIR=lib/system \
     -DCMAKE_INSTALL_INCLUDEDIR=include \
@@ -373,6 +433,10 @@ tier "TIER 2 : launchd -> configd -> SC -> IOKit -> kext_tools -> notify -> sysl
 # build.sh ~1433-1493. launchd (bsd.prog.mk) consumes the I1a MIG stubs + CF;
 # launchctl links CF/ICU/xpc/dispatch/liblaunch via its Makefile + freebsd-shims.
 comp "launchd daemon (post-CF)"
+# Pre-create install dirs (bsd.prog.mk's install doesn't mkdir BINDIR; no
+# distrib-dirs/hierarchy pass in this piecemeal cross-install). launchd -> /sbin,
+# launchctl -> /bin.
+mkdir -p "$DESTDIR/sbin" "$DESTDIR/bin"
 run_buildenv "make -C $SRC/launchd/src DESTDIR=$DESTDIR MIGOUT=$MIG_OUT SYSROOT=$SYSROOT all install"
 test -x "$DESTDIR/sbin/launchd" || { echo "FAIL: /sbin/launchd not installed"; exit 1; }
 
@@ -433,11 +497,11 @@ mkdir -p "$DESTDIR/usr/sbin"
 # -lsystem_kernel -llaunch -lpthread`. Cross-shape: same flags, cross clang +
 # sysroot, --allow-shlib-undefined preserved. TODO verify under cross: if
 # ioreg gains a Makefile, prefer run_buildenv make over this hand link.
-run_buildenv "\$CC -fblocks --sysroot=$SYSROOT \
-    -I$SYSROOT/usr/include -L$SYSROOT/usr/lib/system \
+$CROSS_CC -fblocks --sysroot="$SYSROOT" \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib/system" \
     -Wl,-rpath,/usr/lib/system -Wl,--allow-shlib-undefined \
-    -o $DESTDIR/usr/sbin/ioreg $SRC/libIOKit/ioreg.c \
-    -lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+    -o "$DESTDIR/usr/sbin/ioreg" "$SRC/libIOKit/ioreg.c" \
+    -lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread
 test -x "$DESTDIR/usr/sbin/ioreg" || { echo "FAIL: /usr/sbin/ioreg not installed"; exit 1; }
 needed_check "$DESTDIR/usr/sbin/ioreg" "libIOKit"
 # DROPPED: iokittest/iokitmatchtest/iokitnotify* (host-exec).
@@ -496,12 +560,6 @@ sync_sysroot
 test -f "$DESTDIR/usr/lib/system/libnotify.so.1" || { echo "FAIL: libnotify.so.1 not installed"; exit 1; }
 echo "==> NOTIFY-LIB-OK"
 
-comp "notifyd"
-mkdir -p "$DESTDIR/usr/sbin"
-run_buildenv "make -C $SRC/Libnotify/notifyd DESTDIR=$DESTDIR SYSROOT=$SYSROOT MIGOUT=$LIBNOTIFY_MIG all install"
-test -x "$DESTDIR/usr/sbin/notifyd" || { echo "FAIL: /usr/sbin/notifyd not installed"; exit 1; }
-echo "==> NOTIFYD-BUILD-OK"
-
 # ---- ASL / syslog stack -----------------------------------------------------
 # build.sh ~2179-2295. Generate asl_ipc MIG stubs (host mig); build
 # libsystem_asl (lib) + syslogd + aslmanager + syslog(1) (progs), all against
@@ -526,6 +584,13 @@ sync_sysroot
 test -f "$DESTDIR/usr/lib/system/libsystem_asl.so.1" || { echo "FAIL: libsystem_asl.so.1 not installed"; exit 1; }
 test -f "$DESTDIR/usr/include/asl.h" || { echo "FAIL: /usr/include/asl.h not installed"; exit 1; }
 echo "==> ASL-LIB-OK"
+
+# notifyd builds AFTER libsystem_asl — it links -lnotify AND -lsystem_asl.
+comp "notifyd"
+mkdir -p "$DESTDIR/usr/sbin"
+run_buildenv "make -C $SRC/Libnotify/notifyd DESTDIR=$DESTDIR SYSROOT=$SYSROOT MIGOUT=$LIBNOTIFY_MIG all install"
+test -x "$DESTDIR/usr/sbin/notifyd" || { echo "FAIL: /usr/sbin/notifyd not installed"; exit 1; }
+echo "==> NOTIFYD-BUILD-OK"
 
 comp "syslogd"
 mkdir -p "$DESTDIR/usr/sbin"
@@ -564,14 +629,14 @@ test -x "$DESTDIR/usr/sbin/ipconfigd" || { echo "FAIL: /usr/sbin/ipconfigd not i
 comp "ipconfig(8) CLI"
 # build.sh ~2376-2388 bare `cc` link. Same flags (-Wno-macro-redefined,
 # --allow-shlib-undefined) under the cross clang.  TODO verify under cross.
-run_buildenv "\$CC --sysroot=$SYSROOT \
-    -I$IPCFG_MIG -I$SRC/IPConfiguration \
-    -I$SRC/launchd/liblaunch -I$SRC/launchd/freebsd-shims \
-    -I$SYSROOT/usr/include -L$SYSROOT/usr/lib/system \
+$CROSS_CC --sysroot="$SYSROOT" \
+    -I"$IPCFG_MIG" -I"$SRC/IPConfiguration" \
+    -I"$SRC/launchd/liblaunch" -I"$SRC/launchd/freebsd-shims" \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib/system" \
     -Wno-macro-redefined -Wl,-rpath,/usr/lib/system -Wl,--allow-shlib-undefined \
-    -o $DESTDIR/usr/sbin/ipconfig \
-    $SRC/IPConfiguration/ipconfig.c $IPCFG_MIG/ipconfigUser.c \
-    -llaunch -lsystem_kernel"
+    -o "$DESTDIR/usr/sbin/ipconfig" \
+    "$SRC/IPConfiguration/ipconfig.c" "$IPCFG_MIG/ipconfigUser.c" \
+    -llaunch -lsystem_kernel
 test -x "$DESTDIR/usr/sbin/ipconfig" || { echo "FAIL: /usr/sbin/ipconfig not built"; exit 1; }
 echo "==> ipconfigd + ipconfig built"
 # DROPPED: ipconfigtest/ipconfigrpctest (host-exec).

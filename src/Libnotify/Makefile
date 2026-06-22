@@ -76,7 +76,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 
 # Task #39 Path A: -llaunch provides bootstrap_port (Apple MIG version);
 # libxpc no longer ships those symbols.
-LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel -lpthread -lBlocksRuntime
+LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel -l:libBlocksRuntime.so
 
 # Install path
 LIBDIR=		/usr/lib/system
@@ -86,4 +86,6 @@ SHLIBDIR=	/usr/lib/system
 INCS=		notify.h notify_keys.h
 INCSDIR=	/usr/include
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.lib.mk>

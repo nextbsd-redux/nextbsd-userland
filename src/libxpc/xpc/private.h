@@ -62,6 +62,11 @@ typedef enum {
 #define xpc_event_publisher_fire(pub, name, event)	(void)0
 #define xpc_event_publisher_activate(pub)		(void)0
 #define xpc_event_publisher_cancel(pub)			(void)0
+/* No-op stubs completing the set: libnotify's per-client delivery path calls
+ * these. fire_noboost returns 0 (success -> skips the ENOBUFS/crash branch);
+ * get_service_identifier_for_token returns 0 (false -> no name resolved). */
+#define xpc_event_publisher_fire_noboost(pub, token, event)	0
+#define xpc_get_service_identifier_for_token(token, name)	0
 
 /*
  * event_name_t — fixed-size char array launchd-842 uses to carry

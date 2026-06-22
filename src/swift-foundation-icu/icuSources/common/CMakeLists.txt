@@ -264,20 +264,45 @@ target_sources(_FoundationICU
 # etc.). Not portable to Mach-O (macOS) or COFF (Windows), but those
 # aren't in scope.
 
-# Step 1: build the chunk decoder host-side helper
-add_executable(freebsd_decode_icu_chunks freebsd_decode_icu_chunks.c)
+# Step 1: build the chunk decoder. It is a BUILD-TIME tool — it runs on the
+# build host to decode the data blob — so when cross-compiling it MUST be built
+# with the HOST compiler. Building it with the cross toolchain (add_executable)
+# yields a target-arch ELF that cannot exec on the build host (amd64: "not
+# found" for the missing FreeBSD interp; arm64: "Exec format error"). When
+# cross-compiling, compile it host-native via FREEBSD_HOST_CC (default cc);
+# otherwise keep the normal in-tree target.
+if(CMAKE_CROSSCOMPILING)
+  if(NOT FREEBSD_HOST_CC)
+    set(FREEBSD_HOST_CC cc)
+  endif()
+  set(_freebsd_icu_decoder "${CMAKE_CURRENT_BINARY_DIR}/freebsd_decode_icu_chunks")
+  add_custom_command(
+      OUTPUT "${_freebsd_icu_decoder}"
+      COMMAND ${FREEBSD_HOST_CC} -O2 -o "${_freebsd_icu_decoder}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/freebsd_decode_icu_chunks.c"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/freebsd_decode_icu_chunks.c"
+      COMMENT "Building host-native ICU chunk decoder (cross build)"
+      VERBATIM)
+  add_custom_target(freebsd_decode_icu_chunks_host DEPENDS "${_freebsd_icu_decoder}")
+  set(_freebsd_icu_decoder_cmd "${_freebsd_icu_decoder}")
+  set(_freebsd_icu_decoder_dep freebsd_decode_icu_chunks_host)
+else()
+  add_executable(freebsd_decode_icu_chunks freebsd_decode_icu_chunks.c)
+  set(_freebsd_icu_decoder_cmd "$<TARGET_FILE:freebsd_decode_icu_chunks>")
+  set(_freebsd_icu_decoder_dep freebsd_decode_icu_chunks)
+endif()
 
 # Step 2: emit the binary blob from the 4 hex chunks
 set(_freebsd_icu_packaged_bin "${CMAKE_CURRENT_BINARY_DIR}/icu_packaged_main_data.bin")
 add_custom_command(
     OUTPUT "${_freebsd_icu_packaged_bin}"
-    COMMAND $<TARGET_FILE:freebsd_decode_icu_chunks>
+    COMMAND "${_freebsd_icu_decoder_cmd}"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.0.inc.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.1.inc.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.2.inc.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.3.inc.h"
             "${_freebsd_icu_packaged_bin}"
-    DEPENDS freebsd_decode_icu_chunks
+    DEPENDS ${_freebsd_icu_decoder_dep}
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.0.inc.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.1.inc.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/icu_packaged_main_data.2.inc.h"

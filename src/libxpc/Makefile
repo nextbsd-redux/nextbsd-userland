@@ -78,7 +78,15 @@ LIBDIR=		${PREFIX}/lib/system
 # _NSConcreteStackBlock etc. from -fblocks; -lsbuf resolves the
 # sbuf_* API xpc_misc.c uses for xpc_copy_description. -rpath lets
 # rtld find our libsystem dir at runtime.
-LDADD+=		-lsystem_kernel -ldispatch -lBlocksRuntime -lsbuf -lpthread
+# system_kernel/dispatch are OUR /usr/lib/system libs (not in FreeBSD's
+# _LIBRARIES), so they stay in LDADD. Our BlocksRuntime collides with FreeBSD's
+# base libblocksruntime name, so link it by explicit soname: that dodges
+# releng/15.1 src.libnames.mk's hard error (which forces _LIBRARIES names through
+# LIBADD) while still resolving OUR lib from -L${SYSROOT}${PREFIX}/lib/system.
+LDADD+=		-lsystem_kernel -ldispatch -l:libBlocksRuntime.so
+# sbuf + pthread ARE FreeBSD base libs: releng/15.1 requires they go through
+# LIBADD, not LDADD+=-lfoo (src.libnames.mk:599-607).
+LIBADD+=	sbuf pthread
 # bootstrap_check_in / bootstrap_look_up / bootstrap_port are now
 # provided by liblaunch.so (Apple MIG protocol — see SRCS comment
 # above for the Path A migration). Cannot link -llaunch here without

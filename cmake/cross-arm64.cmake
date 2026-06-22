@@ -18,8 +18,12 @@ set(CMAKE_CXX_COMPILER "${_bindir}/clang++")
 
 set(CMAKE_C_FLAGS_INIT   "--target=${_triple} --sysroot=${_sysroot}")
 set(CMAKE_CXX_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot}")
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "--target=${_triple} --sysroot=${_sysroot}")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot}")
+# Force clang to use lld (multi-target). The host /usr/bin/ld is x86-only and
+# can't link aarch64 objects ("crt1.o: file in wrong format"); the bsd.mk builds
+# use ld.lld for the same reason. Applies to the compiler check + every link.
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "--target=${_triple} --sysroot=${_sysroot} --ld-path=${_bindir}/ld.lld")
 
 set(CMAKE_SYSROOT        "${_sysroot}")
 set(CMAKE_FIND_ROOT_PATH "${_sysroot}")

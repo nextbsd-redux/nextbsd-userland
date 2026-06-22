@@ -189,7 +189,12 @@ CFLAGS+=	-fconstant-cfstrings
 # lib_FoundationICU.so (unified Apple-libicucore-shape library).
 # build.sh creates a libicucore.so symlink for Apple-canonical
 # naming; either link line resolves the same body of code.
-LDADD+=		-ldispatch -lBlocksRuntime -lpthread -l_FoundationICU
+# dispatch / _FoundationICU are OUR /usr/lib/system libs (not in FreeBSD's
+# _LIBRARIES) -> LDADD. Our BlocksRuntime collides with FreeBSD's base
+# libblocksruntime name, so link by explicit soname (dodges releng/15.1
+# src.libnames.mk:607's LIBADD enforcement). pthread is FreeBSD base -> LIBADD.
+LDADD+=		-ldispatch -l:libBlocksRuntime.so -l_FoundationICU
+LIBADD+=	pthread
 
 LIBDIR=		${PREFIX}/lib/system
 

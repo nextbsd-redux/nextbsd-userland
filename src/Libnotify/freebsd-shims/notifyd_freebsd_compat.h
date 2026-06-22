@@ -47,4 +47,25 @@
 #define O_SYMLINK	O_NOFOLLOW	/* FreeBSD spelling */
 #endif
 
+/* Prototypes for the notifyd shims defined in freebsd-shims/notifyd_stubs.c.
+ * Declared in this force-included header so notifyd.c sees them (else
+ * -Werror=implicit-function-declaration on releng/15.1). Pull the types they
+ * reference first (this header is force-included ahead of notifyd's own). */
+#include <stdint.h>
+#include <sys/types.h>
+#include <mach/mach.h>		/* mach_port_t */
+#include <bsm/libbsm.h>		/* audit_token_t */
+
+mach_port_t current_task(void);
+pid_t       audit_token_to_pid(audit_token_t atoken);
+uid_t       audit_token_to_euid(audit_token_t atoken);
+gid_t       audit_token_to_egid(audit_token_t atoken);
+int         sandbox_check_by_audit_token(audit_token_t target, const char *op, int filter, ...);
+int         pthread_setugid_np(uid_t uid, gid_t gid);
+void        xpc_event_publisher_set_error_handler(void *publisher, void *handler);
+void        xpc_event_publisher_set_throttling(void *publisher, uint64_t interval);
+/* reboot_np(RB_PANIC, msg): notifyd's jetsam-panic path; FreeBSD has no jetsam,
+ * so the stub logs + abort()s (never reached in practice). */
+void        reboot_np(int howto, const char *msg);
+
 #endif

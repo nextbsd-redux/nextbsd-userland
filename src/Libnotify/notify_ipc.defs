@@ -41,7 +41,10 @@ type notify_name    = c_string[*:512]
 type notify_path    = array[] of char
 	ctype : caddr_t;
 
-UseSpecialReplyPort 1;
+/* UseSpecialReplyPort 1; dropped — special reply ports need kernel/runtime
+ * support this port lacks (migcom would emit mig_get_special_reply_port(),
+ * which libmach has no equivalent of); plain reply ports work identically.
+ * Same change as configd/config.defs. */
 
 skip; // was _notify_server_register_plain
 skip; // was _notify_server_cancel

@@ -79,4 +79,8 @@ setiopolicy_np(int type, int scope, int policy) {
  * for FreeBSD's /var/run/log clients (Phase J3). */
 #define SOURCE_BSD_SOCK	2
 
+/* Apple MDM API stubbed in notifyd_stubs.c (.PATH-shared into syslogd); asl_action.c
+ * calls it. Pointer-returning, so a missing prototype would truncate on 64-bit. */
+void *configuration_profile_create_notification_key(const char *path);
+
 #endif

@@ -37,6 +37,13 @@ CFLAGS+=	-Wmissing-prototypes -Wpointer-arith
 # where DA itself uses no blocks. Same flag libIOKit + its clients carry.
 CFLAGS+=	-fblocks
 
+# Resolve <IOKit/IOKitLib.h> straight to libIOKit's REAL source header. The
+# installed sysroot copy wasn't reliably winning over the freebsd-shims IOKit
+# stub (IONotificationPortRef / IOIteratorNext / IOObjectGetClass etc. went
+# undeclared in da_iokit_subscribe.c), so point at the source dir first. The
+# matching libIOKit.so is still linked from the sysroot (-lIOKit).
+CFLAGS+=	-I${.CURDIR}/../libIOKit
+
 # ${SYSROOT}/usr/include MUST precede freebsd-shims: <IOKit/IOKitLib.h> has
 # to resolve to libIOKit's REAL installed header (IONotificationPortRef /
 # io_iterator_t / io_name_t / IOServiceAddMatchingNotification, which
@@ -70,9 +77,11 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 #   object model libIOKit's API consumes. -ldispatch + -lBlocksRuntime: the
 #   dispatch queue DA delivers notification callbacks on
 #   (IONotificationPortSetDispatchQueue) + the -fblocks runtime CF/dispatch pull.
-LDADD+=		-llaunch -lsystem_kernel -lpthread
-LDADD+=		-lIOKit -lCoreFoundation -ldispatch -lBlocksRuntime
+LDADD+=		-llaunch -lsystem_kernel
+LDADD+=		-lIOKit -lCoreFoundation -ldispatch -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
+# FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
+LIBADD+=	pthread
 .include <bsd.prog.mk>
