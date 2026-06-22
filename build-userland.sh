@@ -213,6 +213,27 @@ note "host migcom installed at $MIGCOM"
 # =============================================================================
 tier "TIER 1 : libmach -> libdispatch -> libxpc -> liblaunch -> ICU -> CF"
 
+# ---- Populate the cross sysroot (FOUNDATIONAL) ------------------------------
+# The buildenv compiler is invoked with --sysroot=${WORLDTMP} and NO host
+# include/lib fallback (Makefile.inc1 XCFLAGS, :879/:887). The baked
+# kernel-toolchain skips the _includes/_libraries stages
+# (KERNEL_TOOLCHAIN_TGTS = TOOLCHAIN_TGTS:N_obj:N_cleanobj:N_includes:N_libraries),
+# so ${WORLDTMP} has no base headers (sys/types.h, net/*) or libs. Stage the
+# compat-continuous base (the workflow extracted it to $SYSROOT) INTO ${WORLDTMP}
+# and collapse SYSROOT->${WORLDTMP}, so the compiler's --sysroot AND the
+# Makefiles' -I$SYSROOT/-L$SYSROOT resolve against one populated root. Copy only
+# headers+libs (usr/include, usr/lib, lib) — NOT usr/bin/bin/sbin, which would
+# clobber WORLDTMP's cross-tools with FreeBSD-target binaries. DESTDIR stays
+# /stage (clean artifact); sync_sysroot mirrors each built lib back into WORLDTMP.
+WORLDTMP=${MIGCOM%/legacy/usr/libexec/migcom}
+[ -d "$WORLDTMP/usr" ] || { echo "FAIL: could not derive WORLDTMP from MIGCOM=$MIGCOM"; exit 1; }
+echo "==> staging compat base into WORLDTMP=$WORLDTMP; collapsing SYSROOT -> WORLDTMP"
+for d in usr/include usr/lib lib; do
+    [ -d "$SYSROOT/$d" ] && { mkdir -p "$WORLDTMP/$d"; cp -a "$SYSROOT/$d/." "$WORLDTMP/$d/"; }
+done
+SYSROOT="$WORLDTMP"
+export SYSROOT
+
 # ---- libmach (libsystem_kernel) ---------------------------------------------
 # build.sh ~742-774. Installs mach/* headers into the sysroot FIRST — every
 # later component (-I sysroot) and the CMake HAVE_MACH detection depend on
