@@ -64,6 +64,13 @@ CFLAGS+=	-DMIG_TYPE_CHECK=1
 # suffix flags that it's our port, not a stock Apple build.
 CFLAGS+=	-DMIG_VERSION=\"bootstrap_cmds-138-freebsd\"
 
+# When migcom is built host-native through FreeBSD's legacy/bootstrap stage (for
+# the Linux cross-build), the host compiler is GCC, which lacks Apple/clang's
+# `__private_extern__` keyword (a hidden-visibility specifier — irrelevant for a
+# standalone executable). Map it away. Harmless under clang (Apple-native + our
+# cross clang), which accept the keyword regardless.
+CFLAGS+=	-D__private_extern__=
+
 BINDIR=		/usr/libexec	# canonical Apple path
 
 PREFIX?=	/usr

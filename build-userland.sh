@@ -92,10 +92,11 @@ CMAKE_TOOLCHAIN="$ROOT/cmake/cross-${T}.cmake"
 # MIG artifact dirs (pure build artifacts; never installed into $DESTDIR).
 MIGROOT="${MIGROOT:-$ROOT/.mig}"
 
-# Host migcom — installed into $DESTDIR by Tier 0, invoked by every MIG step.
-# (mig.sh shells out to $MIGCOM; $MIGCC is the C preprocessor it runs over
-#  .defs — host cc is correct, .defs preprocessing is arch-neutral.)
-MIGCOM="$DESTDIR/usr/libexec/migcom"
+# Host migcom — built by Tier 0 (FreeBSD legacy stage) and used build-only by
+# every MIG step. It is a runner-native (x86_64-Linux) binary, so it is NOT
+# shipped; Tier 0 points MIGCOM at its legacy build location.
+# (mig.sh shells out to $MIGCOM; $MIGCC preprocesses .defs — host cc, arch-neutral.)
+MIGCOM=""   # set by Tier 0 (legacy-built, build-scratch — never shipped)
 MIG_SH="$SRC/bootstrap_cmds/migcom.tproj/mig.sh"
 MIGCC="${MIGCC:-cc}"
 
@@ -171,43 +172,38 @@ mkdir -p "$MIGROOT"
 # =============================================================================
 tier "TIER 0 : migcom + mig wrapper (HOST tool)"
 
-# build.sh ~947-969. migcom's codegen is arch-neutral, so it is built with the
-# runner's host cc (NOT the cross clang) and installed into $DESTDIR so the
-# later MIG steps and the booted image both find /usr/bin/mig + libexec/migcom.
-comp "migcom (FreeBSD legacy/bootstrap tool, host-native)"
-mkdir -p "$DESTDIR/usr/libexec" "$DESTDIR/usr/bin" "$DESTDIR/usr/share/man/man1"
-# Build migcom the FreeBSD way — the SAME machinery that bootstraps yacc/lex:
-# stage it into the in-container /usr/src and build it host-native via the
-# `legacy` stage with LOCAL_TOOL_DIRS/LOCAL_LEGACY_DIRS. The legacy loop runs
-# `make obj includes all install DESTDIR=${WORLDTMP}/legacy` with BMAKE (the
-# build host's cc), so migcom is a runner-native x86_64 binary on the build PATH.
-# This is in-container + ephemeral, like the kernel build patching /usr/src.
+# migcom is a build-time HOST code generator (turns .defs into C). Build it the
+# FreeBSD way — the SAME machinery that bootstraps yacc/lex: stage it into the
+# in-container /usr/src and build it host-native via the `_legacy` stage with
+# LOCAL_LEGACY_DIRS. The legacy loop runs `make obj includes all install
+# DESTDIR=${WORLDTMP}/legacy` with BMAKE (the build host's gcc). Ephemeral,
+# in-container — like the kernel build patching /usr/src. (`_legacy` is the
+# exposed top-level wrapper that sets up WORLDTMP/BMAKE; the baked kernel-toolchain
+# already ran it, so this just adds migcom atop the baked tools/build.)
 #
-# The Makefile's relative -I../../libmach/include assumes the in-repo layout;
-# under /usr/src/usr.bin/migcom that resolves to /usr/src/libmach/include, so we
-# drop our libmach headers there to satisfy it.
-rm -rf /usr/src/usr.bin/migcom /usr/src/libmach
-mkdir -p /usr/src/usr.bin/migcom /usr/src/libmach
-cp -a "$SRC/bootstrap_cmds/migcom.tproj/." /usr/src/usr.bin/migcom/
+# Placement mirrors the install location: migcom installs to /usr/libexec, so its
+# source dir lives at /usr/src/libexec/migcom (FreeBSD convention). The Makefile's
+# relative -I../../libmach/include then resolves to /usr/src/libmach/include, where
+# we drop our libmach headers.
+#
+# BUILD-ONLY: the result is a runner-native x86_64-Linux binary — it must NOT ship
+# on the FreeBSD ISO (it could not run there). So we do NOT install it into
+# $DESTDIR; we point MIGCOM at its legacy build location for the MIG steps. `mig`
+# is not a base-system runtime dependency — revisit cross-building a TARGET migcom
+# only if we ever want `mig` on the installed system.
+comp "migcom (legacy stage, host-native, build-only)"
+rm -rf /usr/src/libexec/migcom /usr/src/libmach
+mkdir -p /usr/src/libexec/migcom /usr/src/libmach
+cp -a "$SRC/bootstrap_cmds/migcom.tproj/." /usr/src/libexec/migcom/
 cp -a "$SRC/libmach/include" /usr/src/libmach/
-# `_legacy` (not `legacy`) is the exposed top-level target that wraps the legacy
-# stage with WORLDTMP/BMAKE set up. The image's baked kernel-toolchain already
-# ran _legacy, so WORLDTMP/legacy exists and this just adds migcom on top of the
-# baked tools/build (fast) — building it host-native via BMAKE.
 ( cd "$SRCTREE" && ./tools/build/make.py --cross-bindir="$CROSS_BINDIR" \
     TARGET="$T" TARGET_ARCH="$TA" \
-    LOCAL_LEGACY_DIRS=usr.bin/migcom \
+    LOCAL_LEGACY_DIRS=libexec/migcom \
     _legacy )
-# Pull the host-native migcom out of ${WORLDTMP}/legacy and install into our
-# staging so run_mig's MIGCOM=$DESTDIR/usr/libexec/migcom finds it (and it ships).
-MIGCOM_BUILT=$(find /usr/obj -path '*/legacy/usr/libexec/migcom' -type f 2>/dev/null | head -1)
-[ -n "$MIGCOM_BUILT" ] || { echo "FAIL: legacy stage produced no migcom"; exit 1; }
-install -m 0755 "$MIGCOM_BUILT" "$DESTDIR/usr/libexec/migcom"
-install -m 0755 "$SRC/bootstrap_cmds/migcom.tproj/mig.sh" "$DESTDIR/usr/bin/mig"
-install -m 0644 "$SRC/bootstrap_cmds/migcom.tproj/mig.1"    "$DESTDIR/usr/share/man/man1/mig.1"
-install -m 0644 "$SRC/bootstrap_cmds/migcom.tproj/migcom.1" "$DESTDIR/usr/share/man/man1/migcom.1"
-# build.sh ran `chroot ... mig -version` to smoke it; here migcom is a HOST
-# binary so we CAN run it directly (no chroot, no cross).
+MIGCOM=$(find /usr/obj -path '*/legacy/usr/libexec/migcom' -type f 2>/dev/null | head -1)
+[ -n "$MIGCOM" ] || { echo "FAIL: legacy stage produced no migcom"; exit 1; }
+note "host migcom built (build-only, not shipped): $MIGCOM"
+# Smoke it — host binary, run directly (no chroot/cross).
 MIGCC="$MIGCC" MIGCOM="$MIGCOM" /bin/sh "$MIG_SH" -version \
     || { echo "FAIL: mig -version (host) exited non-zero"; exit 1; }
 note "host migcom installed at $MIGCOM"
