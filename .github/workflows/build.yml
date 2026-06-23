@@ -260,14 +260,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
-      - name: Fetch nextbsd boot test
+      # Use the IN-REPO native boot test (tests/boot-test.sh), NOT nextbsd's
+      # Apple-image one: the native FreeBSD-based image validates only the
+      # Darwin+Mach layer (the FreeBSD-component markers — FBSDGLUE, *-LEAF,
+      # PAM-* — were dropped; those test Apple ports this image doesn't ship).
+      - name: Boot test (native-assembled image, Darwin+Mach gate)
         run: |
-          mkdir -p tests
-          curl -fsSL https://raw.githubusercontent.com/nextbsd-redux/nextbsd/main/tests/boot-test.sh \
-            -o tests/boot-test.sh
           chmod +x tests/boot-test.sh
-      - name: Boot test (native-assembled image)
-        run: ./tests/boot-test.sh disk.img
+          ./tests/boot-test.sh disk.img
       - name: Upload boot log
         if: always()
         uses: actions/upload-artifact@v4

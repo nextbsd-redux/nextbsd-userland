@@ -24,6 +24,7 @@
  */
 
 #include <SystemConfiguration/SCPreferences.h>
+#include <SystemConfiguration/SCDynamicStore.h>	/* SCError/SCErrorString */
 #include <CoreFoundation/CoreFoundation.h>
 
 #include <stdio.h>
