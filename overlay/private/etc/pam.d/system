@@ -1,0 +1,21 @@
+# /etc/pam.d/system — common PAM rules included by login/su/sshd/etc.
+#
+# NextBSD uses FreeBSD PAM (libpam + the FreeBSD pam_* modules from
+# nextbsd-freebsd-compat), NOT Apple's OpenPAM port. Modules referenced here
+# are all FreeBSD-provided: pam_unix, pam_lastlog (+ pam_self in login/su).
+#
+# Auth is vs /etc/master.passwd via pam_unix; no NIS, no directory services.
+
+# auth
+auth		required	pam_unix.so		no_warn try_first_pass nullok
+
+# account
+account		required	pam_unix.so
+
+# session — pam_lastlog records the login in utmpx/wtmp/lastlog (FreeBSD's
+# session-tracking module; Apple's pam_uwtmp is absent under FreeBSD PAM).
+# no_fail: a lastlog write hiccup must not abort the login session.
+session		required	pam_lastlog.so		no_fail
+
+# password
+password	required	pam_unix.so		no_warn try_first_pass

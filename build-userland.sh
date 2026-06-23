@@ -681,5 +681,118 @@ echo "==> hostnamed built"
 # DROPPED: hostnametest/hostnameprefset/hostnamedhcpset/hostnamedmdnsset
 #          (all host-exec CI fixtures — moved to the boot test).
 
-tier "DONE : system layer (Tiers 0-2) staged into $DESTDIR for $T/$TA"
+# =============================================================================
+# TIER 3 — on-image test binaries (freebsd-launchd-mach suite).
+# build.sh builds these natively and installs them to
+# /usr/tests/freebsd-launchd-mach/; CI's run.sh RUNS them post-login (they are
+# on-image tests, NOT build-time host-exec tests — so they cross-build safely:
+# we install, never exec here). Single-file links against the Tier-1 Darwin
+# libs. --sysroot gives base headers/libs, -I$DESTDIR the Mach headers,
+# -L$DESTDIR/usr/lib/system libsystem_kernel. Mirrors build.sh ~800-947.
+# =============================================================================
+tier "TIER 3 : on-image test binaries (freebsd-launchd-mach suite)"
+TESTDIR="$DESTDIR/usr/tests/freebsd-launchd-mach"
+mkdir -p "$TESTDIR" "$DESTDIR/usr/include/servers" "$DESTDIR/usr/sbin" "$DESTDIR/usr/bin"
+
+# Target mig + migcom for the IMAGE (/usr/bin/mig + /usr/libexec/migcom). The
+# Tier-0 migcom is a runner-native (Linux) codegen tool, NOT shippable; build a
+# TARGET migcom via the cross buildenv so `mig -version` runs on the booted
+# image (the MIG-BUILD marker). mig.sh is an arch-neutral wrapper. (build.sh ~977)
+comp "target mig + migcom (on-image MIG-BUILD)"
+run_buildenv "make -C $SRC/bootstrap_cmds/migcom.tproj DESTDIR=$DESTDIR BINDIR=/usr/libexec MK_MAN=no all install"
+install -m755 "$SRC/bootstrap_cmds/migcom.tproj/mig.sh" "$DESTDIR/usr/bin/mig"
+test -x "$DESTDIR/usr/libexec/migcom" || { echo "FAIL: target /usr/libexec/migcom not installed"; exit 1; }
+# <servers/bootstrap.h> by hand (libmach ships the mach/ headers; this one sits
+# at /usr/include/servers/ per Apple convention).
+cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/bootstrap.h"
+TCC="$CROSS_CC --sysroot=$SYSROOT -I$DESTDIR/usr/include -L$DESTDIR/usr/lib/system -L$SYSROOT/usr/lib -Wl,-rpath,/usr/lib/system"
+
+comp "mach_kmod tests (libsystem_kernel roundtrips)"
+for t in test_libmach test_mach_port test_evfilt_machport test_task_special_port test_host_bootstrap; do
+    $TCC -o "$TESTDIR/$t" "$SRC/mach_kmod/tests/$t.c" -lsystem_kernel
+done
+$TCC -o "$TESTDIR/test_evfilt_machport_concurrent" "$SRC/mach_kmod/tests/test_evfilt_machport_concurrent.c" -lsystem_kernel -lpthread
+# test_busystate: libc-only (sysctlbyname + syscall), no -lsystem_kernel.
+$TCC -o "$TESTDIR/test_busystate" "$SRC/mach_kmod/tests/test_busystate.c"
+test -x "$TESTDIR/test_libmach" || { echo "FAIL: test_libmach not built"; exit 1; }
+
+comp "bootstrap suite (libbootstrap static + pthread)"
+$TCC -I"$SRC/bootstrap" -o "$TESTDIR/test_bootstrap" \
+    "$SRC/bootstrap/tests/test_bootstrap.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+$TCC -I"$SRC/bootstrap" -o "$DESTDIR/usr/sbin/bootstrap_server" \
+    "$SRC/bootstrap/bootstrap_server.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+$TCC -I"$SRC/bootstrap" -o "$TESTDIR/test_bootstrap_remote" \
+    "$SRC/bootstrap/tests/test_bootstrap_remote.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+
+# ---- remaining on-image test suites (all install into the same TESTDIR). ----
+# Recipes mirror build.sh; sources already vendored under src/. CF-touching
+# tests add -fblocks; everything from configd on adds --allow-shlib-undefined.
+# Apple-PAM tests (pamframeworktest/pammodulestest) are SKIPPED — NextBSD uses
+# FreeBSD PAM, those Apple sources aren't vendored.
+TUNDEF="-Wl,--allow-shlib-undefined"
+LAUNCHINC="-I$SRC/launchd/liblaunch -I$SRC/launchd/freebsd-shims"
+
+comp "libdispatch / libxpc / CoreFoundation tests"
+$TCC -o "$TESTDIR/test_libdispatch" "$SRC/libdispatch-tests/test_libdispatch.c" -ldispatch -lpthread
+$TCC -o "$TESTDIR/test_libdispatch_mach" "$SRC/libdispatch-tests/test_libdispatch_mach.c" -ldispatch -lsystem_kernel -lpthread
+$TCC -o "$TESTDIR/test_libxpc" "$SRC/libxpc-tests/test_libxpc.c" -lxpc -llaunch -ldispatch -lsystem_kernel -lpthread
+$TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/test_corefoundation.c" -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread
+# test_bsd_logger (SYSLOG-RUN marker): plain libc BSD syslog() round-trip; source
+# lives in tests/ (build.sh ~1076). No Darwin libs needed.
+$TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
+
+comp "configd tests (reuse MIG configUser.c from \$CONFIGD_MIG)"
+for t in configtest notifytest patterntest listtest; do
+    $TCC $TUNDEF -I"$CONFIGD_MIG" -I"$SRC/configd" -o "$TESTDIR/$t" \
+        "$SRC/configd/$t.c" "$CONFIGD_MIG/configUser.c" -llaunch -lsystem_kernel
+done
+$TCC $TUNDEF -I"$CONFIGD_MIG" -I"$SRC/configd" -o "$TESTDIR/multitest" \
+    "$SRC/configd/multitest.c" "$SRC/configd/config_wire.c" "$CONFIGD_MIG/configUser.c" -llaunch -lsystem_kernel
+
+comp "libSystemConfiguration tests"
+SCA="-lSystemConfiguration -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+SCB="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+for t in sctest scmultitest scprefstest scpathtest sclocktest scplinktest scnetiftest scnetsvctest scnetsettest scvlantest scbondtest scbridgetest; do
+    $TCC -fblocks $TUNDEF -o "$TESTDIR/$t" "$SRC/libSystemConfiguration/$t.c" $SCA
+done
+for t in scnotifytest scrltest scprefsnotifytest; do
+    $TCC -fblocks $TUNDEF -o "$TESTDIR/$t" "$SRC/libSystemConfiguration/$t.c" $SCB
+done
+
+comp "libIOKit tests"
+IOA="-lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+IOB="-lIOKit -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokittest"      "$SRC/libIOKit/iokittest.c"      $IOA
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokitmatchtest" "$SRC/libIOKit/iokitmatchtest.c" $IOA
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokitnotifytest" "$SRC/libIOKit/iokitnotifytest.c" $IOB
+$TCC -fblocks $TUNDEF -I"$SRC/libIOKit" -o "$TESTDIR/iokitnotifyrt" "$SRC/libIOKit/iokitnotifyrt.c" $IOB
+
+comp "mDNS / DiskArbitration tests"
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/mdnstest" "$SRC/mDNSResponder/mdnstest.c" -llaunch -lsystem_kernel
+$TCC $TUNDEF -o "$TESTDIR/dnssdtest" "$SRC/mDNSResponder/dnssdtest.c" -ldns_sd
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/datest" "$SRC/DiskArbitration/datest.c" -llaunch -lsystem_kernel
+
+comp "IPConfiguration tests (reuse MIG ipconfigUser.c from \$IPCFG_MIG)"
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/ipconfigtest" "$SRC/IPConfiguration/ipconfigtest.c" -llaunch -lsystem_kernel
+$TCC $TUNDEF -Wno-macro-redefined -I"$IPCFG_MIG" -I"$SRC/IPConfiguration" $LAUNCHINC \
+    -o "$TESTDIR/ipconfigrpctest" "$SRC/IPConfiguration/ipconfigrpctest.c" "$IPCFG_MIG/ipconfigUser.c" -llaunch -lsystem_kernel
+
+comp "hostnamed tests"
+HNL="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread"
+for t in hostnametest hostnameprefset hostnamedhcpset; do
+    $TCC -fblocks $TUNDEF $LAUNCHINC -o "$TESTDIR/$t" "$SRC/hostnamed/$t.c" $HNL
+done
+# dns_sd variants: sysroot include FIRST so the real dns_sd.h shadows the shim stub.
+for t in hostnamedmdnsset hostnamedbonjourset; do
+    $CROSS_CC --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$DESTDIR/usr/include" $LAUNCHINC \
+        -L"$DESTDIR/usr/lib/system" -L"$SYSROOT/usr/lib" -Wl,-rpath,/usr/lib/system $TUNDEF -fblocks \
+        -o "$TESTDIR/$t" "$SRC/hostnamed/$t.c" $HNL -ldns_sd
+done
+
+comp "kext_tools test (test_kextd_mach)"
+$TCC -o "$TESTDIR/test_kextd_mach" "$SRC/mach_kmod/tests/test_kextd_mach.c" -lsystem_kernel
+
+echo "==> on-image test suite cross-built ($(ls "$TESTDIR" | wc -l | tr -d ' ') binaries in $TESTDIR)"
+
+tier "DONE : system layer (Tiers 0-2) + on-image tests staged into $DESTDIR for $T/$TA"
 echo "==> nextbsd-userland cross build complete"
