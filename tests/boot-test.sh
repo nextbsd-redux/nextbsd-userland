@@ -1165,6 +1165,18 @@ expect {
 # PAM is exercised by login succeeding — every marker above only fires
 # after login completes through /etc/pam.d/login.
 
+# Wait for the launchd-mach run.sh to FINISH (its FreeBSD PAM tail was removed —
+# not a Darwin/Mach component) before starting the IOKit script, so the IOKit
+# run.sh isn't queued behind it. This is the pull model's sequencing barrier:
+# deterministic, not a fixed sleep — we proceed the instant the sentinel lands.
+# The timeout is only a safety bound (an older run.sh without the sentinel just
+# WARNs and we continue, since the IOKit script is sent next regardless).
+set timeout 120
+expect {
+    timeout { puts "\nWARN: launchd-mach run.sh done-sentinel not seen (older run.sh — informational)" }
+    "LAUNCHD-MACH-RUN-DONE" { puts "\nOK: launchd-mach suite complete — starting IOKit run" }
+}
+
 # IOCATALOGUE — umbrella #211 (in-kernel IOKit matcher) U1 gate. Runs kextd
 # (#217), which pushes every shipped kext's IOKitPersonalities into the
 # in-kernel IOCatalogue (#215) via /dev/iocatalogue, then checks the catalogue
