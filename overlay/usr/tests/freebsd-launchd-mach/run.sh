@@ -14,6 +14,20 @@
 
 set -u
 
+# --- KEXT-AUTOLOAD DIAGNOSTIC (investigating e1000 "no driver attached") ----
+echo "=== KEXT-DIAG: /var/log/kextd.log (boot-time -w -v push) ==="
+cat /var/log/kextd.log 2>/dev/null || echo "(no kextd.log)"
+echo "=== KEXT-DIAG: kexts staged in /System/Library/Extensions ==="
+ls -1 /System/Library/Extensions/ 2>/dev/null || echo "(empty/missing)"
+ls -l /System/Library/Extensions/IntelEthernet.kext/Contents/MacOS/IntelEthernet 2>/dev/null || echo "(no IntelEthernet.kext binary)"
+echo "=== KEXT-DIAG: kextstat ==="
+kextstat 2>/dev/null || echo "(kextstat failed)"
+echo "=== KEXT-DIAG: ifconfig -a ==="
+ifconfig -a 2>/dev/null || echo "(ifconfig failed)"
+echo "=== KEXT-DIAG: dmesg network/e1000 probe ==="
+dmesg 2>/dev/null | grep -iE "network|ethernet|<.*em|e1000|no driver|nomatch|IntelEthernet|igb|vtnet|pci0" || echo "(no probe match)"
+echo "=== end KEXT-DIAG ==="
+
 # 1. kernel-side: mach module registered. mach is compiled INTO the kernel
 # (#181), so it's a kernel module rather than a separate .ko. The kld* CLIs
 # were retired (#193); kextstat -m queries the module by name via modfind(2)
