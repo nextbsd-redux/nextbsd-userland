@@ -714,7 +714,73 @@ $TCC -I"$SRC/bootstrap" -o "$DESTDIR/usr/sbin/bootstrap_server" \
     "$SRC/bootstrap/bootstrap_server.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
 $TCC -I"$SRC/bootstrap" -o "$TESTDIR/test_bootstrap_remote" \
     "$SRC/bootstrap/tests/test_bootstrap_remote.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
-echo "==> freebsd-launchd-mach test suite cross-built ($(ls "$TESTDIR" | wc -l | tr -d ' ') binaries)"
+
+# ---- remaining on-image test suites (all install into the same TESTDIR). ----
+# Recipes mirror build.sh; sources already vendored under src/. CF-touching
+# tests add -fblocks; everything from configd on adds --allow-shlib-undefined.
+# Apple-PAM tests (pamframeworktest/pammodulestest) are SKIPPED — NextBSD uses
+# FreeBSD PAM, those Apple sources aren't vendored.
+TUNDEF="-Wl,--allow-shlib-undefined"
+LAUNCHINC="-I$SRC/launchd/liblaunch -I$SRC/launchd/freebsd-shims"
+
+comp "libdispatch / libxpc / CoreFoundation tests"
+$TCC -o "$TESTDIR/test_libdispatch" "$SRC/libdispatch-tests/test_libdispatch.c" -ldispatch -lpthread
+$TCC -o "$TESTDIR/test_libdispatch_mach" "$SRC/libdispatch-tests/test_libdispatch_mach.c" -ldispatch -lsystem_kernel -lpthread
+$TCC -o "$TESTDIR/test_libxpc" "$SRC/libxpc-tests/test_libxpc.c" -lxpc -llaunch -ldispatch -lsystem_kernel -lpthread
+$TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/test_corefoundation.c" -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread
+
+comp "configd tests (reuse MIG configUser.c from \$CONFIGD_MIG)"
+for t in configtest notifytest patterntest listtest; do
+    $TCC $TUNDEF -I"$CONFIGD_MIG" -I"$SRC/configd" -o "$TESTDIR/$t" \
+        "$SRC/configd/$t.c" "$CONFIGD_MIG/configUser.c" -llaunch -lsystem_kernel
+done
+$TCC $TUNDEF -I"$CONFIGD_MIG" -I"$SRC/configd" -o "$TESTDIR/multitest" \
+    "$SRC/configd/multitest.c" "$SRC/configd/config_wire.c" "$CONFIGD_MIG/configUser.c" -llaunch -lsystem_kernel
+
+comp "libSystemConfiguration tests"
+SCA="-lSystemConfiguration -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+SCB="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+for t in sctest scmultitest scprefstest scpathtest sclocktest scplinktest scnetiftest scnetsvctest scnetsettest scvlantest scbondtest scbridgetest; do
+    $TCC -fblocks $TUNDEF -o "$TESTDIR/$t" "$SRC/libSystemConfiguration/$t.c" $SCA
+done
+for t in scnotifytest scrltest scprefsnotifytest; do
+    $TCC -fblocks $TUNDEF -o "$TESTDIR/$t" "$SRC/libSystemConfiguration/$t.c" $SCB
+done
+
+comp "libIOKit tests"
+IOA="-lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
+IOB="-lIOKit -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokittest"      "$SRC/libIOKit/iokittest.c"      $IOA
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokitmatchtest" "$SRC/libIOKit/iokitmatchtest.c" $IOA
+$TCC -fblocks $TUNDEF -o "$TESTDIR/iokitnotifytest" "$SRC/libIOKit/iokitnotifytest.c" $IOB
+$TCC -fblocks $TUNDEF -I"$SRC/libIOKit" -o "$TESTDIR/iokitnotifyrt" "$SRC/libIOKit/iokitnotifyrt.c" $IOB
+
+comp "mDNS / DiskArbitration tests"
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/mdnstest" "$SRC/mDNSResponder/mdnstest.c" -llaunch -lsystem_kernel
+$TCC $TUNDEF -o "$TESTDIR/dnssdtest" "$SRC/mDNSResponder/dnssdtest.c" -ldns_sd
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/datest" "$SRC/DiskArbitration/datest.c" -llaunch -lsystem_kernel
+
+comp "IPConfiguration tests (reuse MIG ipconfigUser.c from \$IPCFG_MIG)"
+$TCC $TUNDEF $LAUNCHINC -o "$TESTDIR/ipconfigtest" "$SRC/IPConfiguration/ipconfigtest.c" -llaunch -lsystem_kernel
+$TCC $TUNDEF -Wno-macro-redefined -I"$IPCFG_MIG" -I"$SRC/IPConfiguration" $LAUNCHINC \
+    -o "$TESTDIR/ipconfigrpctest" "$SRC/IPConfiguration/ipconfigrpctest.c" "$IPCFG_MIG/ipconfigUser.c" -llaunch -lsystem_kernel
+
+comp "hostnamed tests"
+HNL="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread"
+for t in hostnametest hostnameprefset hostnamedhcpset; do
+    $TCC -fblocks $TUNDEF $LAUNCHINC -o "$TESTDIR/$t" "$SRC/hostnamed/$t.c" $HNL
+done
+# dns_sd variants: sysroot include FIRST so the real dns_sd.h shadows the shim stub.
+for t in hostnamedmdnsset hostnamedbonjourset; do
+    $CROSS_CC --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$DESTDIR/usr/include" $LAUNCHINC \
+        -L"$DESTDIR/usr/lib/system" -L"$SYSROOT/usr/lib" -Wl,-rpath,/usr/lib/system $TUNDEF -fblocks \
+        -o "$TESTDIR/$t" "$SRC/hostnamed/$t.c" $HNL -ldns_sd
+done
+
+comp "kext_tools test (test_kextd_mach)"
+$TCC -o "$TESTDIR/test_kextd_mach" "$SRC/mach_kmod/tests/test_kextd_mach.c" -lsystem_kernel
+
+echo "==> on-image test suite cross-built ($(ls "$TESTDIR" | wc -l | tr -d ' ') binaries in $TESTDIR)"
 
 tier "DONE : system layer (Tiers 0-2) + on-image tests staged into $DESTDIR for $T/$TA"
 echo "==> nextbsd-userland cross build complete"
