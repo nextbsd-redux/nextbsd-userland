@@ -681,5 +681,40 @@ echo "==> hostnamed built"
 # DROPPED: hostnametest/hostnameprefset/hostnamedhcpset/hostnamedmdnsset
 #          (all host-exec CI fixtures — moved to the boot test).
 
-tier "DONE : system layer (Tiers 0-2) staged into $DESTDIR for $T/$TA"
+# =============================================================================
+# TIER 3 — on-image test binaries (freebsd-launchd-mach suite).
+# build.sh builds these natively and installs them to
+# /usr/tests/freebsd-launchd-mach/; CI's run.sh RUNS them post-login (they are
+# on-image tests, NOT build-time host-exec tests — so they cross-build safely:
+# we install, never exec here). Single-file links against the Tier-1 Darwin
+# libs. --sysroot gives base headers/libs, -I$DESTDIR the Mach headers,
+# -L$DESTDIR/usr/lib/system libsystem_kernel. Mirrors build.sh ~800-947.
+# =============================================================================
+tier "TIER 3 : on-image test binaries (freebsd-launchd-mach suite)"
+TESTDIR="$DESTDIR/usr/tests/freebsd-launchd-mach"
+mkdir -p "$TESTDIR" "$DESTDIR/usr/include/servers" "$DESTDIR/usr/sbin"
+# <servers/bootstrap.h> by hand (libmach ships the mach/ headers; this one sits
+# at /usr/include/servers/ per Apple convention).
+cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/bootstrap.h"
+TCC="$CROSS_CC --sysroot=$SYSROOT -I$DESTDIR/usr/include -L$DESTDIR/usr/lib/system -L$SYSROOT/usr/lib -Wl,-rpath,/usr/lib/system"
+
+comp "mach_kmod tests (libsystem_kernel roundtrips)"
+for t in test_libmach test_mach_port test_evfilt_machport test_task_special_port test_host_bootstrap; do
+    $TCC -o "$TESTDIR/$t" "$SRC/mach_kmod/tests/$t.c" -lsystem_kernel
+done
+$TCC -o "$TESTDIR/test_evfilt_machport_concurrent" "$SRC/mach_kmod/tests/test_evfilt_machport_concurrent.c" -lsystem_kernel -lpthread
+# test_busystate: libc-only (sysctlbyname + syscall), no -lsystem_kernel.
+$TCC -o "$TESTDIR/test_busystate" "$SRC/mach_kmod/tests/test_busystate.c"
+test -x "$TESTDIR/test_libmach" || { echo "FAIL: test_libmach not built"; exit 1; }
+
+comp "bootstrap suite (libbootstrap static + pthread)"
+$TCC -I"$SRC/bootstrap" -o "$TESTDIR/test_bootstrap" \
+    "$SRC/bootstrap/tests/test_bootstrap.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+$TCC -I"$SRC/bootstrap" -o "$DESTDIR/usr/sbin/bootstrap_server" \
+    "$SRC/bootstrap/bootstrap_server.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+$TCC -I"$SRC/bootstrap" -o "$TESTDIR/test_bootstrap_remote" \
+    "$SRC/bootstrap/tests/test_bootstrap_remote.c" "$SRC/bootstrap/libbootstrap.c" -lsystem_kernel -lpthread
+echo "==> freebsd-launchd-mach test suite cross-built ($(ls "$TESTDIR" | wc -l | tr -d ' ') binaries)"
+
+tier "DONE : system layer (Tiers 0-2) + on-image tests staged into $DESTDIR for $T/$TA"
 echo "==> nextbsd-userland cross build complete"
