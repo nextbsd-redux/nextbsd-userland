@@ -692,7 +692,16 @@ echo "==> hostnamed built"
 # =============================================================================
 tier "TIER 3 : on-image test binaries (freebsd-launchd-mach suite)"
 TESTDIR="$DESTDIR/usr/tests/freebsd-launchd-mach"
-mkdir -p "$TESTDIR" "$DESTDIR/usr/include/servers" "$DESTDIR/usr/sbin"
+mkdir -p "$TESTDIR" "$DESTDIR/usr/include/servers" "$DESTDIR/usr/sbin" "$DESTDIR/usr/bin"
+
+# Target mig + migcom for the IMAGE (/usr/bin/mig + /usr/libexec/migcom). The
+# Tier-0 migcom is a runner-native (Linux) codegen tool, NOT shippable; build a
+# TARGET migcom via the cross buildenv so `mig -version` runs on the booted
+# image (the MIG-BUILD marker). mig.sh is an arch-neutral wrapper. (build.sh ~977)
+comp "target mig + migcom (on-image MIG-BUILD)"
+run_buildenv "make -C $SRC/bootstrap_cmds/migcom.tproj DESTDIR=$DESTDIR BINDIR=/usr/libexec MK_MAN=no all install"
+install -m755 "$SRC/bootstrap_cmds/migcom.tproj/mig.sh" "$DESTDIR/usr/bin/mig"
+test -x "$DESTDIR/usr/libexec/migcom" || { echo "FAIL: target /usr/libexec/migcom not installed"; exit 1; }
 # <servers/bootstrap.h> by hand (libmach ships the mach/ headers; this one sits
 # at /usr/include/servers/ per Apple convention).
 cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/bootstrap.h"

@@ -132,6 +132,10 @@ apple_private_runtime() {
     : > "$ROOTFS/var/log/utx.log"
     chmod 644 "$ROOTFS/var/run/utx.active" \
               "$ROOTFS/var/log/utx.lastlogin" "$ROOTFS/var/log/utx.log"
+    # root's home (master.passwd: root -> /root). Without it login warns
+    # "No home directory. Logging in with home = /". build.sh:145 does the same.
+    # FreeBSD ships no pam_mkhomedir, so login won't create it — we must.
+    mkdir -p "$ROOTFS/root"; chmod 0700 "$ROOTFS/root"
 }
 
 # ---------------------------------------------------------------------------
