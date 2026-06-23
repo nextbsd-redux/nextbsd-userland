@@ -92,61 +92,44 @@ jobs:
           name: nextbsd-userland-${{ matrix.target }}
           path: /tmp/nextbsd-userland-${{ matrix.target }}.tar.gz
 
-  # --- Phase 1: native Linux image assembly (no FreeBSD VM) ---------------
-  # pkgdemon.github.io/nextbsd-native-image-assembly-plan.html. Assemble a
-  # minimal bootable .img on the runner from the four cross-built artifacts
-  # (ingesting the userland tarball instead of rebuilding it in a VM), then
-  # boot it. Replaces the old VM smoke-test (which pulled nextbsd's published img);
-  # does not gate
-  # publish. amd64 only for now (arm64 is Phase 4).
-  assemble-image:
-    name: assemble-image (native Linux, no VM)
-    needs: userland
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:amd64-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download this run's userland artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: nextbsd-userland-amd64
-          path: art
-      - name: Download base / kernel / modules continuous artifacts
+      # --- Phase 1: native image assembly, folded into this job (amd64 PR) ---
+      # Assemble the bootable .img right here rather than in a separate job: the
+      # base sysroot is already downloaded (/tmp/base.tar.gz) and the userland
+      # layer is freshly built (/tmp/nextbsd-userland-amd64.tar.gz), so we avoid
+      # re-fetching the base AND the userland artifact upload/download round-trip
+      # — only kernel + modules (which this job lacks) are fetched. The image is
+      # uploaded for the separate qemu boot job (needs a non-container KVM runner).
+      # arm64 stays build-only (Phase 4); overlay is vendored at ./overlay.
+      - name: Assemble disk.img (reuse staged base + built userland)
+        if: matrix.target == 'amd64' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          ARCH: amd64
+          BASE_TGZ: /tmp/base.tar.gz
+          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-amd64.tar.gz
+          USERLAND_TGZ: /tmp/nextbsd-userland-amd64.tar.gz
+          OVERLAY: ${{ github.workspace }}/overlay
+          WORK: ${{ github.workspace }}/nbimg
         run: |
-          gh release download continuous -R nextbsd-redux/nextbsd-freebsd-compat \
-            --pattern 'nextbsd-base-amd64.tar.gz' --dir art --clobber
+          mkdir -p art
           gh release download continuous -R nextbsd-redux/nextbsd-kernel \
             --pattern 'nextbsd-kernel-amd64.tar.gz' --dir art --clobber
           gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
             --pattern '*kext*.tar.gz' --dir art --clobber || true
-      # overlay is vendored in-repo at ./overlay (migrated from nextbsd's
-      # overlays/, + the FreeBSD-base /etc defaults the pkg used to supply:
-      # gettytab/ttys/services/protocols). The checkout provides it — no fetch.
-      - name: Assemble disk.img
-        env:
-          ARCH: amd64
-          BASE_TGZ: ${{ github.workspace }}/art/nextbsd-base-amd64.tar.gz
-          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-amd64.tar.gz
-          USERLAND_TGZ: ${{ github.workspace }}/art/nextbsd-userland-amd64.tar.gz
-          OVERLAY: ${{ github.workspace }}/overlay
-          WORK: ${{ github.workspace }}/nbimg
-        run: |
-          chmod +x ci/assemble-image.sh
           export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          chmod +x ci/assemble-image.sh
           ./ci/assemble-image.sh
       - name: Upload native-assembled image
+        if: matrix.target == 'amd64' && github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: nextbsd-ci-image-amd64
           path: nbimg/out/disk.img
 
+
   ci-image-boot:
     name: ci-image-boot (qemu, native-assembled .img)
-    needs: assemble-image
+    needs: userland
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
