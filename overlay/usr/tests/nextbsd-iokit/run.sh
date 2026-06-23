@@ -257,4 +257,7 @@ else
 	echo "EM-AUTOLOAD-FAIL: boot daemon did NOT autoload IntelEthernet — em0 absent (real-hardware autoload failure)"
 fi
 
+# Done-sentinel: lets boot-test.sh end the IOKit section the instant this script
+# finishes (pull model) instead of waiting a fixed per-marker timeout.
+echo "IOKIT-RUN-DONE"
 exit 0

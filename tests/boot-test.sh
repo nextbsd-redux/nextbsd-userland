@@ -1176,155 +1176,32 @@ expect {
 # only an explicit IOCATALOGUE-FAIL gates.
 send "/usr/tests/nextbsd-iokit/run.sh\r"
 
-# Bound the IOKit-marker waits. These markers are all NON-FATAL on timeout (the
-# script self-SKIPs / older run.sh lacks the step), but the overlay's
-# nextbsd-iokit/run.sh is pre-C1.1 and doesn't emit several of them — at the
-# default 480s timeout x6 markers that exceeds the 40-min job limit and the run
-# is killed mid-wait. 45s is ample for the markers it DOES emit; the rest WARN
-# quickly. The e1000 kext auto-load is already proven upstream (em0 came up via
-# the loaded IntelEthernet.kext + DHCP, so all the SC/IPCFG/MDNS markers passed).
-set timeout 45
-
-# IOREG — C1.1 (#218) libIOKit registry migration gate. nextbsd-iokit/run.sh
-# now runs the IOREG check FIRST (before the IOCATALOGUE/IOKIT-LOOKUP/KEXTD-LOAD
-# markers below) so a K1-but-no-K2 kernel still reports it. libIOKit now walks
-# the K1 /dev/ioregistry device (hwregd retired in #218); the
-# `ioreg` tool is run over the live device and the root + boot disk/NIC nubs are
-# asserted. This is also the deferred K1 functional proof. The on-image script
-# self-SKIPs on a kernel predating /dev/ioregistry, so this stays green on
-# pre-K1 continuous images; the timeout here is non-fatal (older run.sh lacking
-# the IOREG step), and only an explicit IOREG-FAIL gates. OK/SKIP are folded
-# into one block that ends only on OK/FAIL/SKIP, so it can never sit blocking
-# while a later required marker scrolls past (the MDNS-IFWATCH lesson).
-expect {
-    timeout {
-        puts "\nWARN: IOREG marker not seen (pre-C1.1 run.sh — informational)"
+    # Pull model (no fixed per-marker sleeps): nextbsd-iokit/run.sh prints its
+    # markers then a final IOKIT-RUN-DONE sentinel. Match whatever it emits (in
+    # any order) in ONE event loop that ENDS the instant the sentinel arrives.
+    # The single timeout is only a safety bound (it also covers the launchd-mach
+    # run.sh finishing its tail before this script's queued input runs); normally
+    # we end at the sentinel in seconds. Only an explicit *-FAIL gates; SKIP /
+    # absent markers are informational (the e1000 auto-load is already proven by
+    # the SC/IPCFG/MDNS markers above).
+    set timeout 180
+    expect {
+        "IOREG-FAIL"        { puts "\nFAIL: libIOKit /dev/ioregistry walk failed"; exit 1 }
+        "IOKITNOTIFY-FAIL"  { puts "\nFAIL: libIOKit notify round-trip failed"; exit 1 }
+        "IOCATALOGUE-FAIL"  { puts "\nFAIL: kextd did not populate the IOCatalogue"; exit 1 }
+        "IOKIT-LOOKUP-FAIL" { puts "\nFAIL: in-kernel matcher lookup failed"; exit 1 }
+        "KEXTD-LOAD-FAIL"   { puts "\nFAIL: kextd did not load on a kernel request"; exit 1 }
+        "EM-AUTOLOAD-FAIL"  { puts "\nFAIL: em0 absent - IntelEthernet.kext did not auto-load/bind"; exit 1 }
+        "IOREG-OK"          { puts "\nOK: IOREG"; exp_continue }
+        "IOKITNOTIFY-OK"    { puts "\nOK: IOKITNOTIFY"; exp_continue }
+        "IOCATALOGUE-OK"    { puts "\nOK: IOCATALOGUE"; exp_continue }
+        "IOKIT-LOOKUP-OK"   { puts "\nOK: IOKIT-LOOKUP"; exp_continue }
+        "KEXTD-LOAD-OK"     { puts "\nOK: KEXTD-LOAD"; exp_continue }
+        "EM-AUTOLOAD-OK"    { puts "\nOK: EM-AUTOLOAD (em0 via kext auto-load)"; exp_continue }
+        -re {(IOREG|IOKITNOTIFY|IOCATALOGUE|IOKIT-LOOKUP|KEXTD-LOAD|EM-AUTOLOAD)-SKIP} { puts "\nWARN: IOKit SKIP (informational)"; exp_continue }
+        "IOKIT-RUN-DONE"    { puts "\nOK: IOKit tests complete (sentinel)" }
+        timeout             { puts "\nWARN: IOKit tests did not finish in 180s (informational)" }
     }
-    "IOREG-FAIL" {
-        puts "\nFAIL: libIOKit /dev/ioregistry walk did not show the registry"
-        exit 1
-    }
-    "IOREG-SKIP" {
-        puts "\nWARN: IOREG-SKIP — no /dev/ioregistry (kernel without K1)"
-    }
-    "IOREG-OK" {
-        puts "\nOK: libIOKit walks /dev/ioregistry (root + boot device nubs)"
-    }
-}
-# IOKITNOTIFY — C1.2 (#218) IOKitNotify migration round-trip gate. run.sh's
-# iokitnotifyrt registers a matching notification through libIOKit (now via
-# IOREGIOCWATCH on the in-kernel registry, #225) and fires IOREGIOCTESTEVENT to
-# synthesize a matching device event, confirming the registered callback fired —
-# the deterministic proof of the kernel notify channel with no physical device.
-#
-# CRITICAL (MDNS-IFWATCH lesson): OK/SKIP are folded into ONE block that ends
-# only on OK/FAIL/SKIP, with a NON-FATAL timeout, so an absent/optional marker
-# can never sit blocking while a later required marker (IOCATALOGUE/...) scrolls
-# past unmatched. The Part A inject ioctl must merge + reach continuous before
-# this can pass; until then iokitnotifyrt SELF-SKIPs (IOKITNOTIFY-SKIP), so this
-# gate is green on pre-Part-A continuous images. Only IOKITNOTIFY-FAIL gates.
-expect {
-    timeout {
-        puts "\nWARN: IOKITNOTIFY marker not seen (pre-C1.2 run.sh — informational)"
-    }
-    "IOKITNOTIFY-FAIL" {
-        puts "\nFAIL: libIOKit notify round-trip — injected event never reached the callback"
-        exit 1
-    }
-    "IOKITNOTIFY-SKIP" {
-        puts "\nWARN: IOKITNOTIFY-SKIP — no /dev/ioregistry or IOREGIOCTESTEVENT (pre-Part-A kernel)"
-    }
-    "IOKITNOTIFY-OK" {
-        puts "\nOK: libIOKit notify round-trip (IOREGIOCWATCH + IOREGIOCTESTEVENT -> callback)"
-    }
-}
-expect {
-    timeout {
-        puts "\nWARN: IOCATALOGUE marker not seen (pre-kextd/K2 image — informational)"
-    }
-    "IOCATALOGUE-FAIL" {
-        puts "\nFAIL: kextd did not populate the in-kernel IOCatalogue"
-        exit 1
-    }
-    "IOCATALOGUE-SKIP" {
-        puts "\nWARN: IOCATALOGUE-SKIP — no /dev/iocatalogue (kernel without K2)"
-    }
-    "IOCATALOGUE-OK" {
-        puts "\nOK: kextd populated the in-kernel IOCatalogue (IntelWiFi, incl. 8260)"
-    }
-}
-
-# IOKIT-LOOKUP — K3 (#216) matcher gate. The same on-image script asks the
-# kernel (IOCATIOCLOOKUP) which bundle claims the 8260 (0x24f38086); it must
-# resolve to IntelWiFi. Proves the in-kernel matcher's lookup without the
-# physical NIC. SKIP on a kernel predating IOCATIOCLOOKUP; non-fatal on timeout
-# (older images whose run.sh lacks this step); only IOKIT-LOOKUP-FAIL gates.
-expect {
-    timeout {
-        puts "\nWARN: IOKIT-LOOKUP marker not seen (pre-K3a image — informational)"
-    }
-    "IOKIT-LOOKUP-FAIL" {
-        puts "\nFAIL: in-kernel matcher did not resolve the 8260 to IntelWiFi"
-        exit 1
-    }
-    "IOKIT-LOOKUP-SKIP" {
-        puts "\nWARN: IOKIT-LOOKUP-SKIP — kernel without IOCATIOCLOOKUP (pre-K3a)"
-    }
-    "IOKIT-LOOKUP-OK" {
-        puts "\nOK: in-kernel matcher resolves 0x24f38086 -> IntelWiFi"
-    }
-}
-
-# (The raw kernel->kextd Mach round-trip — formerly the KEXTD-MACH gate via
-# test_kextd_mach — is now subsumed by KEXTD-LOAD below: the auto-started daemon
-# exercises the same HOST_KEXTD_PORT delivery and then actually loads the kext.)
-
-# KEXTD-LOAD — K3b step 3 (#217) gate. The kextd daemon (`kextd -w`) receives a
-# kernel load request and actually kldloads the bundle (if_iwlwifi). This is the
-# auto-load path minus the physical 8260 (that bind is the t420 test). Non-fatal
-# on timeout + self-SKIP so it stays green on images/kernels predating step 3;
-# only KEXTD-LOAD-FAIL gates. Longer timeout — it starts a daemon + polls a load.
-set kextd_load_timeout 120
-expect {
-    timeout {
-        puts "\nWARN: KEXTD-LOAD marker not seen (pre-step-3 image — informational)"
-    }
-    "KEXTD-LOAD-FAIL" {
-        puts "\nFAIL: kextd daemon did not load the kext on a kernel load request"
-        exit 1
-    }
-    "KEXTD-LOAD-SKIP" {
-        puts "\nWARN: KEXTD-LOAD-SKIP — kextd -w unsupported (pre-step-3)"
-    }
-    "KEXTD-LOAD-OK" {
-        puts "\nOK: kextd daemon loaded if_iwlwifi on a kernel load request"
-    }
-}
-
-# EM-AUTOLOAD — #219 (D1) Intel ethernet em → IntelEthernet.kext auto-load gate.
-# Once the kernel drops `device em` (nodevice em in config/NEXTBSD), the qemu
-# e1000 hits device_nomatch and kextd auto-loads IntelEthernet.kext to bind it
-# as em0. Self-SKIPs while em is still built in (em0 up but no loaded kext), so
-# this stays green on pre-#219 kernels / images; only EM-AUTOLOAD-FAIL gates
-# (em0 absent — the auto-load+bind did not happen). Non-fatal on timeout (older
-# run.sh lacking this step). This is the full #219 auto-load+attach proof: unlike
-# the 8260 (KEXTD-LOAD above, no qemu device), qemu DOES emulate the e1000, so
-# the bind actually exercises here.
-expect {
-    timeout {
-        puts "\nWARN: EM-AUTOLOAD marker not seen (pre-#219 run.sh — informational)"
-    }
-    "EM-AUTOLOAD-FAIL" {
-        puts "\nFAIL: em0 absent — IntelEthernet.kext did not auto-load/bind (#219)"
-        exit 1
-    }
-    "EM-AUTOLOAD-SKIP" {
-        puts "\nWARN: EM-AUTOLOAD-SKIP — em still built into the kernel (pre-#219 nodevice em)"
-    }
-    "EM-AUTOLOAD-OK" {
-        puts "\nOK: em0 up via kextd auto-load of IntelEthernet.kext (#219)"
-    }
-}
 
 set timeout 60
 
