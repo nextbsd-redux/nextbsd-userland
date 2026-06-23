@@ -1176,6 +1176,15 @@ expect {
 # only an explicit IOCATALOGUE-FAIL gates.
 send "/usr/tests/nextbsd-iokit/run.sh\r"
 
+# Bound the IOKit-marker waits. These markers are all NON-FATAL on timeout (the
+# script self-SKIPs / older run.sh lacks the step), but the overlay's
+# nextbsd-iokit/run.sh is pre-C1.1 and doesn't emit several of them — at the
+# default 480s timeout x6 markers that exceeds the 40-min job limit and the run
+# is killed mid-wait. 45s is ample for the markers it DOES emit; the rest WARN
+# quickly. The e1000 kext auto-load is already proven upstream (em0 came up via
+# the loaded IntelEthernet.kext + DHCP, so all the SC/IPCFG/MDNS markers passed).
+set timeout 45
+
 # IOREG — C1.1 (#218) libIOKit registry migration gate. nextbsd-iokit/run.sh
 # now runs the IOREG check FIRST (before the IOCATALOGUE/IOKIT-LOOKUP/KEXTD-LOAD
 # markers below) so a K1-but-no-K2 kernel still reports it. libIOKit now walks
