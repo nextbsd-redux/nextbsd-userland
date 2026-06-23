@@ -162,7 +162,14 @@ fixup_rootfs() {
         echo "WARN: no $etc/master.passwd — login will have no users" >&2
     fi
     [ -f "$etc/login.conf" ] && { cap_mkdb "$etc/login.conf" || echo "WARN: cap_mkdb failed" >&2; }
-    # bake into the image as uid/gid 0 (mtree manifest re-applies setuid below)
+    # OSKext authentication REQUIRES kexts AND their enclosing path to be
+    # root:wheel (uid/gid 0). The base/userland/kernel-modules tarballs carry
+    # their build-runner uid (e.g. 1001) and `tar -x` preserves it, so the
+    # staged kexts are 1001:1001 -> kextd load fails "authentication problems"
+    # (OSReturn 0xdc00800d) and NO driver binds (e1000 stays unattached, 0 NICs).
+    # chown the whole staged tree to 0:0; makefs has no -F manifest so it
+    # packages this ownership verbatim. (No setuid bits in this tree to clear.)
+    chown -R 0:0 "$ROOTFS"
 }
 
 # ---------------------------------------------------------------------------
