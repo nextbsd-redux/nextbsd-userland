@@ -737,6 +737,9 @@ $TCC -o "$TESTDIR/test_libdispatch" "$SRC/libdispatch-tests/test_libdispatch.c" 
 $TCC -o "$TESTDIR/test_libdispatch_mach" "$SRC/libdispatch-tests/test_libdispatch_mach.c" -ldispatch -lsystem_kernel -lpthread
 $TCC -o "$TESTDIR/test_libxpc" "$SRC/libxpc-tests/test_libxpc.c" -lxpc -llaunch -ldispatch -lsystem_kernel -lpthread
 $TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/test_corefoundation.c" -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread
+# test_bsd_logger (SYSLOG-RUN marker): plain libc BSD syslog() round-trip; source
+# lives in tests/ (build.sh ~1076). No Darwin libs needed.
+$TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
 
 comp "configd tests (reuse MIG configUser.c from \$CONFIGD_MIG)"
 for t in configtest notifytest patterntest listtest; do
