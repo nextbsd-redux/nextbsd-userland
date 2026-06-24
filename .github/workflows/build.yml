@@ -181,13 +181,20 @@ jobs:
           prerelease: true
           fail_on_unmatched_files: true
           files: out/*.tar.gz
-      # Cascade to the nextbsd ISO assembler ONLY on a real upstream change,
-      # after `continuous` is refreshed (mirrors compat/kernel).
-      - name: Trigger downstream nextbsd ISO build
+      # Cascade to the downstream consumers ONLY on a real upstream change,
+      # after `continuous` is refreshed (mirrors compat/kernel). userland's
+      # publish is the SINGLE producer that fans out to both the ISO builder
+      # (nextbsd) and the package builder (nextbsd-pkg) — nextbsd-pkg is
+      # triggered by userland-updated alone (maintainer decision; kernel/kext-only
+      # changes use nextbsd-pkg's workflow_dispatch escape hatch).
+      - name: Trigger downstream builds (nextbsd ISO + nextbsd-pkg packages)
         if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         run: |
           gh api repos/nextbsd-redux/nextbsd/dispatches \
+            -f event_type=userland-updated \
+            -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha }}"
+          gh api repos/nextbsd-redux/nextbsd-pkg/dispatches \
             -f event_type=userland-updated \
             -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha }}"
