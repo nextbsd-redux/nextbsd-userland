@@ -25,7 +25,7 @@ Screen run_finish(ScreenInteractive& screen, AppState& st) {
   auto renderer = Renderer(layout, [&] {
     Element head =
         st.success
-            ? (text("✓  NextBSD Server installed successfully.") | color(theme::ok) | bold)
+            ? (text("✓  NextBSD installed successfully.") | color(theme::ok) | bold)
             : (text("✗  Installation failed: " + st.fail_stage) | color(theme::bad) | bold);
     auto row = [](const std::string& k, const std::string& v) {
       return hbox({text("  " + k) | color(theme::amberDim) | size(WIDTH, EQUAL, 14),

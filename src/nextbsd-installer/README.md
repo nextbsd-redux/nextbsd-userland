@@ -1,6 +1,6 @@
 # nextbsd-installer
 
-A dialog-driven, text-mode installer for headless / console NextBSD server
+A dialog-driven, text-mode installer for headless / console NextBSD
 deployments — a **C++ FTXUI front-end** over a **`/bin/sh` engine**.
 
 - **UI (this binary):** FTXUI (MIT), statically linked from the vendored

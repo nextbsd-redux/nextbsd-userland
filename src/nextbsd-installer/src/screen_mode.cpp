@@ -54,7 +54,7 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
                           (st.disks.empty() ? std::string("(no disks)") : st.disks.front().dev) +
                           " — found no bootable NextBSD root.");
     auto body = vbox({
-        text("Welcome to NextBSD Server.") | color(theme::amberBright),
+        text("Welcome to NextBSD.") | color(theme::amberBright),
         text(""),
         text("Choose an action:"),
         text(""),

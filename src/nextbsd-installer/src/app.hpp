@@ -26,7 +26,7 @@ struct Disk {
 struct ExistingRoot {
   bool found = false;
   std::string dev;        // e.g. ada0p2
-  std::string version;    // e.g. "NextBSD Server 2026-05-20"
+  std::string version;    // e.g. "NextBSD 2026-05-20"
 };
 
 struct AppState {
