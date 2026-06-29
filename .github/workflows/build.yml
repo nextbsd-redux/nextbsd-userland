@@ -198,3 +198,73 @@ jobs:
           gh api repos/nextbsd-redux/nextbsd-pkg/dispatches \
             -f event_type=userland-updated \
             -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha }}"
+
+  # ----------------------------------------------------------------------------
+  # SPIKE (build-only measurement — DO NOT MERGE AS-IS): cross-build the vendored
+  # FTXUI (the candidate installer UI library) and time it, per arch, to size the
+  # cost of adding it to NextBSD. Fully isolated: its own job, builds into /tmp,
+  # NEVER writes /stage, never changes the published `continuous` artifact, and
+  # never triggers the downstream cascade. Read the cost from the "Configure + build FTXUI
+  # (timed)" step. Built LIB-ONLY (examples/tests/docs OFF) — that's all the
+  # installer would ship. Sources vendored at src/ftxui (v6.1.9, MIT). PRs only.
+  measure-ftxui:
+    name: measure ftxui (${{ matrix.target }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          - target: arm64
+            target_arch: aarch64
+    container:
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain image ships no cmake/ninja (same reason the userland job
+      # apt-installs them for its CMake components). FTXUI is a CMake build.
+      - name: Install host build deps (cmake/ninja)
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends cmake ninja-build
+
+      # Same compat continuous sysroot the real userland build links against —
+      # FTXUI is C++ and needs libc++/libcxxrt + headers, which that base ships.
+      - name: Stage sysroot from compat continuous
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/sysroot"
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-freebsd-compat \
+            --pattern "nextbsd-base-${{ matrix.target }}.tar.gz" \
+            --output /tmp/base.tar.gz --clobber
+          tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
+
+      # Cross-configure + build FTXUI lib-only, timed. Reuses the repo's existing
+      # cmake/cross-<arch>.cmake toolchain file (reads $CROSS_BINDIR + $SYSROOT
+      # from the env, pins ld.lld) — the same one userland's CMake components use.
+      - name: Configure + build FTXUI (timed, lib only)
+        env:
+          T: ${{ matrix.target }}
+          SYSROOT: ${{ github.workspace }}/sysroot
+        run: |
+          set -eu
+          echo "==> FTXUI cross-build  T=$T  (examples/tests/docs OFF)"
+          echo "::group::cmake configure (timed)"
+          time cmake -S src/ftxui -B /tmp/ftxui-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/cross-$T.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFTXUI_BUILD_EXAMPLES=OFF \
+            -DFTXUI_BUILD_TESTS=OFF \
+            -DFTXUI_BUILD_DOCS=OFF \
+            -DFTXUI_ENABLE_INSTALL=OFF \
+            -DFTXUI_QUIET=ON
+          echo "::endgroup::"
+          echo "::group::ninja build (timed)"
+          time cmake --build /tmp/ftxui-build -j"$(nproc)"
+          echo "::endgroup::"
+          find /tmp/ftxui-build -name '*.a' -exec ls -lh {} +
