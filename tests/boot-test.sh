@@ -94,7 +94,7 @@ if [ -z "$FW" ]; then
 fi
 echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
+export ARCH ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -189,10 +189,19 @@ loader_set "set boot_multicons=YES"
 # Verbose diagnostic trace toggles. CI-only — the shipped ISO is silent by
 # default. The kernel reads mach.debug_enable as a tunable (CTLFLAG_RWTUN) at
 # boot; launchd PID 1 and libxpc both read kenv "launchd_trace=1" once at
-# startup. Together these gate the [T41-*]/[T39-*] trace points; keeping them on
-# for CI gives a paper trail for the next regression.
-loader_set "set mach.debug_enable=1"
-loader_set "set launchd_trace=1"
+# startup. Together these gate the [T41-*]/[T39-*] trace points; on amd64 (KVM)
+# they're a cheap paper trail for the next regression.
+#
+# AMD64 ONLY: on arm64 there is no KVM on the hosted runner, so the boot runs
+# under single-thread TCG. The trace flood (~6.8k lines last run) then both
+# crawls the emulated boot AND buries the test markers, so the suite can't
+# finish in the window. Skip the trace on arm64 — the markers the expect blocks
+# below match come from the on-image run.sh, not from these trace points, so
+# nothing downstream needs them.
+if {$env(ARCH) eq "amd64"} {
+    loader_set "set mach.debug_enable=1"
+    loader_set "set launchd_trace=1"
+}
 send -s -- "boot\r"
 
 # Stage 1a: capture getty's boot banner. PAM port iter 4 (issue #99)
