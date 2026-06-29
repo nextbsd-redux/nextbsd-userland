@@ -11,14 +11,15 @@
 # Inputs (env):
 #   ARCH        amd64 | arm64                       (default amd64)
 #   WORK        scratch dir                          (default /tmp/nbimg)
-#   OUT         output dir for disk.img              (default $WORK/out)
+#   OUT         output dir for the .img               (default $WORK/out)
 #   BASE_TGZ    nextbsd-base-$ARCH.tar.gz            (compat base = whole rootfs)
 #   KERNEL_TGZ  nextbsd-kernel-$ARCH.tar.gz          (-> /boot/kernel/kernel)
 #   MODULES_TGZ space-separated kext tarball(s)      (-> /System/Library/Extensions)
 #   USERLAND_TGZ nextbsd-userland-$ARCH.tar.gz       (Darwin system layer)
 #   OVERLAY     dir whose contents overlay the rootfs (authoritative /etc + plists)
 #   SRC         freebsd-src checkout                 (default /usr/src)
-# Output: $OUT/disk.img
+#   IMG_DATE    build datestamp YYYYMMDD-HHMMSS       (default: now, UTC)
+# Output: $OUT/NextBSD-<arch>-<IMG_DATE>.img
 set -eu
 
 ARCH="${ARCH:-amd64}"
@@ -27,6 +28,11 @@ OUT="${OUT:-$WORK/out}"
 SRC="${SRC:-/usr/src}"
 ROOTFS="$WORK/rootfs"
 TOOLS="$WORK/tools"            # host-built makefs/mkimg land here
+# Datestamp computed ONCE in CI (passed via IMG_DATE) so the workflow artifact
+# name, the .img.zip, the inner .img member, and the published continuous asset
+# never drift. Mirrors nextbsd build.sh:26. Standalone runs fall back to now.
+IMG_DATE="${IMG_DATE:-$(date -u +%Y%m%d-%H%M%S)}"
+IMG_NAME="NextBSD-${ARCH}-${IMG_DATE}.img"
 case "$ARCH" in
   amd64)  TARGET_ARCH=amd64;  EFI_NAME=BOOTX64.EFI ;;
   arm64)  TARGET_ARCH=aarch64; EFI_NAME=BOOTAA64.EFI ;;
@@ -189,7 +195,7 @@ assemble() {
     makefs -t msdos -o fat_type=32 -o sectors_per_cluster=1 -o volume_label=EFISYS \
         -s 33292k "$WORK/esp.img" "$espdir"
 
-    log "mkimg GPT -> $OUT/disk.img"
+    log "mkimg GPT -> $OUT/$IMG_NAME"
     if [ "$ARCH" = amd64 ]; then
         for f in boot/pmbr boot/gptboot; do
             [ -f "$ROOTFS/$f" ] || { echo "ERROR: rootfs/$f missing" >&2; exit 1; }
@@ -199,19 +205,19 @@ assemble() {
             -p freebsd-boot/bootfs:="$ROOTFS/boot/gptboot" \
             -p efi/efiboot0:="$WORK/esp.img" \
             -p freebsd-ufs/ROOTFS:="$WORK/rootfs.ufs" \
-            -o "$OUT/disk.img"
+            -o "$OUT/$IMG_NAME"
     else
         # arm64: UEFI only — no pmbr/gptboot
         mkimg -s gpt -f raw \
             -p efi/efiboot0:="$WORK/esp.img" \
             -p freebsd-ufs/ROOTFS:="$WORK/rootfs.ufs" \
-            -o "$OUT/disk.img"
+            -o "$OUT/$IMG_NAME"
     fi
-    ls -lh "$OUT/disk.img"
+    ls -lh "$OUT/$IMG_NAME"
 }
 
 build_host_tools
 stage_rootfs
 fixup_rootfs
 assemble
-log "done: $OUT/disk.img"
+log "done: $OUT/$IMG_NAME"

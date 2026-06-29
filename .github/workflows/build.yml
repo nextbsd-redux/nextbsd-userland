@@ -4,7 +4,9 @@ name: Build NextBSD Userland (Darwin system layer)
 # / IOKit + daemons) on an Ubuntu host with the nextbsd-kernel-toolchain clang
 # cross-compiler. REUSES the image's baked kernel-toolchain via `buildenv`
 # (no per-run toolchain rebuild). Publishes a rolling `continuous` userland
-# artifact that the nextbsd ISO assembler ingests.
+# artifact that the nextbsd ISO assembler ingests, PLUS — now — the natively
+# assembled bootable CI .img for BOTH arches, named like nextbsd does
+# (NextBSD-<arch>-<date>.img.zip + .sha256), versioned per run and continuous.
 #
 # Scope: Tier 0-2 only (see README) — NO POSIX command suites (those come from
 # FreeBSD via nextbsd-freebsd-compat's srclist) and NO PAM (a later pass).
@@ -14,7 +16,7 @@ on:
   repository_dispatch:
     types: [base-updated]        # from nextbsd-freebsd-compat after its base `continuous` refresh
   pull_request:
-    paths: ['src/**', 'build-userland.sh', 'cmake/**', '.github/workflows/build.yml']
+    paths: ['src/**', 'build-userland.sh', 'cmake/**', 'ci/**', 'tests/**', 'overlay/**', '.github/workflows/build.yml']
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -59,11 +61,12 @@ jobs:
       #      cross-builds never use CMake, so the kernel-toolchain image lacks
       #      cmake/ninja — but the two CMake components (libdispatch,
       #      swift-foundation-icu) need them on the BUILD host. bison/flex/gcc/
-      #      bmake are already in the image. (Future: bake these into the image.)
-      - name: Install host build deps (cmake/ninja for the CMake components)
+      #      bmake are already in the image. `zip` is for packing the .img below.
+      #      (Future: bake these into the image.)
+      - name: Install host build deps (cmake/ninja for the CMake components, zip for image packing)
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends cmake ninja-build
+          apt-get install -y --no-install-recommends cmake ninja-build zip
 
       # (B) Cross-build Tiers 0-2 into /stage. build-userland.sh enters
       #     `make.py buildenv` per component (reusing the baked kernel-toolchain
@@ -92,39 +95,78 @@ jobs:
           name: nextbsd-userland-${{ matrix.target }}
           path: /tmp/nextbsd-userland-${{ matrix.target }}.tar.gz
 
-      # --- Phase 1: native image assembly, folded into this job (amd64 PR) ---
+      # --- Native image assembly, folded into this job (BOTH arches) ---
       # Assemble the bootable .img right here rather than in a separate job: the
       # base sysroot is already downloaded (/tmp/base.tar.gz) and the userland
-      # layer is freshly built (/tmp/nextbsd-userland-amd64.tar.gz), so we avoid
+      # layer is freshly built (/tmp/nextbsd-userland-<arch>.tar.gz), so we avoid
       # re-fetching the base AND the userland artifact upload/download round-trip
-      # — only kernel + modules (which this job lacks) are fetched. The image is
-      # uploaded for the separate qemu boot job (needs a non-container KVM runner).
-      # arm64 stays build-only (Phase 4); overlay is vendored at ./overlay.
-      - name: Assemble disk.img (reuse staged base + built userland)
-        if: matrix.target == 'amd64' && github.event_name == 'pull_request'
+      # — only kernel + modules (which this job lacks) are fetched. Runs on EVERY
+      # event so main/repository_dispatch produces the image the publish job ships
+      # (continuous), and PRs produce it for the amd64 boot gate. overlay vendored
+      # at ./overlay.
+      #
+      # The datestamp is computed ONCE here and threaded through assemble-image.sh
+      # (IMG_DATE) so the inner .img member, the .img.zip, the .sha256, the
+      # workflow artifact name, and the published continuous asset all carry the
+      # same stamp and never drift — mirrors nextbsd build.sh.
+      - name: Compute build datestamp
+        id: meta
+        run: echo "date=$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      # arm64 image assembly is new + unproven (arm64 was build-only / Phase 4),
+      # so its assemble/pack/upload steps are continue-on-error: a first-bring-up
+      # failure must not break the green amd64 build or the gating arm64 *userland*
+      # build above. amd64 stays fully gating. Flip arm64 to gating once proven.
+      - name: Assemble NextBSD-${{ matrix.target }}-${{ steps.meta.outputs.date }}.img
+        id: assemble
+        continue-on-error: ${{ matrix.target == 'arm64' }}
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
-          ARCH: amd64
+          ARCH: ${{ matrix.target }}
+          IMG_DATE: ${{ steps.meta.outputs.date }}
           BASE_TGZ: /tmp/base.tar.gz
-          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-amd64.tar.gz
-          USERLAND_TGZ: /tmp/nextbsd-userland-amd64.tar.gz
+          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-${{ matrix.target }}.tar.gz
+          USERLAND_TGZ: /tmp/nextbsd-userland-${{ matrix.target }}.tar.gz
           OVERLAY: ${{ github.workspace }}/overlay
           WORK: ${{ github.workspace }}/nbimg
         run: |
           mkdir -p art
           gh release download continuous -R nextbsd-redux/nextbsd-kernel \
-            --pattern 'nextbsd-kernel-amd64.tar.gz' --dir art --clobber
+            --pattern 'nextbsd-kernel-${{ matrix.target }}.tar.gz' --dir art --clobber
+          # Driver kexts: the arch-neutral device-kext tarballs (intel*/graphics)
+          # plus the per-arch module set, whichever the `continuous` release ships.
           gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
             --pattern '*kext*.tar.gz' --dir art --clobber || true
-          export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+            --pattern 'nextbsd-modules-${{ matrix.target }}.tar.gz' --dir art --clobber || true
+          export MODULES_TGZ="$(ls art/*kext*.tar.gz art/nextbsd-modules-${{ matrix.target }}.tar.gz 2>/dev/null | tr '\n' ' ')"
           chmod +x ci/assemble-image.sh
           ./ci/assemble-image.sh
-      - name: Upload native-assembled image
-        if: matrix.target == 'amd64' && github.event_name == 'pull_request'
+
+      # Pack like nextbsd: zip -9 the dated raw .img so the zip member basename ==
+      # the zip stem (NextBSD-<arch>-<date>.img inside NextBSD-<arch>-<date>.img.zip),
+      # then sha256 the .img.zip (relative basename so the .sha256 body matches).
+      - name: Pack + checksum the image (nextbsd naming)
+        id: pack
+        if: steps.assemble.outcome == 'success'
+        continue-on-error: ${{ matrix.target == 'arm64' }}
+        run: |
+          IMG="NextBSD-${{ matrix.target }}-${{ steps.meta.outputs.date }}.img"
+          mkdir -p out
+          ( cd nbimg/out && zip -9 "$GITHUB_WORKSPACE/out/${IMG}.zip" "$IMG" )
+          ( cd out && sha256sum "${IMG}.zip" > "${IMG}.zip.sha256" )
+          ls -lh out/
+          cat "out/${IMG}.zip.sha256"
+
+      - name: Upload per-run image artifact (versioned)
+        if: steps.pack.outcome == 'success'
+        continue-on-error: ${{ matrix.target == 'arm64' }}
         uses: actions/upload-artifact@v4
         with:
-          name: nextbsd-ci-image-amd64
-          path: nbimg/out/disk.img
+          name: NextBSD-${{ matrix.target }}-${{ steps.meta.outputs.date }}
+          path: |
+            out/NextBSD-${{ matrix.target }}-${{ steps.meta.outputs.date }}.img.zip
+            out/NextBSD-${{ matrix.target }}-${{ steps.meta.outputs.date }}.img.zip.sha256
 
 
   ci-image-boot:
@@ -135,22 +177,27 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4          # for the in-repo native tests/boot-test.sh
+      # Pull the dated amd64 image artifact by glob (avoids threading the
+      # datestamp between jobs); boot-test.sh unzips the .img.zip itself.
       - uses: actions/download-artifact@v4
         with:
-          name: nextbsd-ci-image-amd64
-          path: .
+          pattern: NextBSD-amd64-*
+          path: dl
+          merge-multiple: true
       - name: Install qemu + expect + OVMF
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf unzip
       # Use the IN-REPO native boot test (tests/boot-test.sh), NOT nextbsd's
       # Apple-image one: the native FreeBSD-based image validates only the
       # Darwin+Mach layer (the FreeBSD-component markers — FBSDGLUE, *-LEAF,
       # PAM-* — were dropped; those test Apple ports this image doesn't ship).
       - name: Boot test (native-assembled image, Darwin+Mach gate)
         run: |
+          IMG=$(ls dl/NextBSD-amd64-*.img.zip)
+          echo "==> booting $IMG"
           chmod +x tests/boot-test.sh
-          ./tests/boot-test.sh disk.img
+          ./tests/boot-test.sh "$IMG"
       - name: Upload boot log
         if: always()
         uses: actions/upload-artifact@v4
@@ -168,19 +215,40 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Gather artifacts
+      - name: Gather artifacts (userland tarballs + dated images)
         run: |
           mkdir -p out
-          find artifacts -name 'nextbsd-userland-*.tar.gz' -exec cp {} out/ \;
+          find artifacts -name 'nextbsd-userland-*.tar.gz'   -exec cp {} out/ \;
+          find artifacts -name 'NextBSD-*.img.zip'           -exec cp {} out/ \;
+          find artifacts -name 'NextBSD-*.img.zip.sha256'    -exec cp {} out/ \;
           ls -la out/
-      - name: Publish to continuous release
+      # Prune the PREVIOUS run's dated image assets so they don't pile up under
+      # the rolling `continuous` tag. CRITICAL: prune ONLY NextBSD-*.img.zip(.sha256)
+      # — do NOT delete the release/tag (nextbsd does, but it can: every asset it
+      # ships is regenerated). OUR `continuous` ALSO hosts the userland tarballs
+      # that nextbsd-pkg + the ISO builder consume; wiping the release would break
+      # them. So delete just the stale image assets, then add the new dated ones.
+      - name: Prune stale image assets from continuous (keep userland tarballs)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for a in $(gh release view continuous -R "$GITHUB_REPOSITORY" \
+                        --json assets -q '.assets[].name' 2>/dev/null \
+                        | grep -E '^NextBSD-.*\.img\.zip(\.sha256)?$' || true); do
+            echo "pruning stale asset: $a"
+            gh release delete-asset continuous "$a" -R "$GITHUB_REPOSITORY" -y || true
+          done
+      - name: Publish to continuous release (userland tarballs + dated images)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: continuous
           name: Continuous userland build
           prerelease: true
           fail_on_unmatched_files: true
-          files: out/*.tar.gz
+          files: |
+            out/*.tar.gz
+            out/NextBSD-*.img.zip
+            out/NextBSD-*.img.zip.sha256
       # Cascade to the downstream consumers ONLY on a real upstream change,
       # after `continuous` is refreshed (mirrors compat/kernel). userland's
       # publish is the SINGLE producer that fans out to both the ISO builder
