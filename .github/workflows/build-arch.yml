@@ -1,0 +1,163 @@
+name: build-arch (reusable per-arch pipeline)
+
+# Reusable per-arch lane: build the Darwin system layer -> assemble the native
+# CI .img -> (optionally) boot-test it. build.yml calls this ONCE PER ARCH, so
+# each arch is a fully independent pipeline: amd64's boot starts the instant
+# amd64's build finishes, in parallel with arm64 — there is no cross-arch matrix
+# barrier (a `needs:` on a matrix job would wait for ALL legs; separate called
+# workflows do not).
+#
+# Cross-builds Tier 0-2 only (see README); both arches cross-build on the x86_64
+# runner via the per-arch nextbsd-kernel-toolchain image.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: 'amd64 | arm64'
+        required: true
+        type: string
+      target_arch:
+        description: 'amd64 | aarch64 (FreeBSD TARGET_ARCH)'
+        required: true
+        type: string
+      boot:
+        description: 'run the qemu boot test for this arch (PR only). amd64 today.'
+        required: false
+        default: false
+        type: boolean
+      fbsd_sha:
+        description: 'pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  userland:
+    name: userland (${{ inputs.arch }})
+    runs-on: ubuntu-24.04
+    container:
+      # Per-arch toolchain image: clang cross-compiler at $CROSS_BINDIR,
+      # FreeBSD /usr/src + make.py, and the baked kernel-toolchain.
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ inputs.arch }}-${{ inputs.fbsd_sha && format('fbsd-{0}', inputs.fbsd_sha) || 'latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # (A) Stage the cross SYSROOT from compat's `continuous` base — the built
+      #     libc/libsys/libs (+ headers) the Darwin stack links against. HARD
+      #     dependency: userland is downstream of compat.
+      - name: Stage sysroot from compat continuous
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/sysroot"
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-freebsd-compat \
+            --pattern "nextbsd-base-${{ inputs.arch }}.tar.gz" \
+            --output /tmp/base.tar.gz --clobber
+          tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
+
+      # (A2) Host build deps the toolchain image doesn't ship: the two CMake
+      #      components (libdispatch, swift-foundation-icu) need cmake/ninja on
+      #      the BUILD host. bison/flex/gcc/bmake are already in the image.
+      - name: Install host build deps (cmake/ninja for the CMake components)
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends cmake ninja-build
+
+      # (B) Cross-build Tiers 0-2 into /stage. build-userland.sh enters
+      #     `make.py buildenv` per component (reusing the baked kernel-toolchain
+      #     — no rebuild) and owns the dependency order.
+      - name: Build Darwin system layer into /stage
+        env:
+          T: ${{ inputs.arch }}
+          TA: ${{ inputs.target_arch }}
+          SYSROOT: ${{ github.workspace }}/sysroot
+          DESTDIR: /stage
+        run: |
+          chmod +x ./build-userland.sh
+          ./build-userland.sh
+
+      # (D) Pack — raw tar of /stage rooted at / (so /usr/lib/system, /sbin,
+      #     /usr/sbin, /usr/include, /usr/tests). nextbsd extracts it over the base.
+      - name: Pack userland artifact
+        run: |
+          rm -f /stage/METALOG
+          # (placeholder) re-apply setuid bits the unprivileged cross-install
+          # drops — none in the Tier 0-2 system layer today.
+          tar -C /stage -czf "/tmp/nextbsd-userland-${{ inputs.arch }}.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextbsd-userland-${{ inputs.arch }}
+          path: /tmp/nextbsd-userland-${{ inputs.arch }}.tar.gz
+
+      # --- Phase 1: native image assembly, folded into this job (PR) ---
+      # Assemble the bootable .img right here: the base sysroot is already
+      # downloaded (/tmp/base.tar.gz) and the userland layer is freshly built
+      # (/tmp/nextbsd-userland-<arch>.tar.gz), so we avoid re-fetching the base
+      # AND the userland artifact upload/download round-trip — only kernel +
+      # modules (which this job lacks) are fetched. The image is uploaded for the
+      # separate qemu boot job (needs a non-container KVM runner). Runs for both
+      # arches (assemble-image.sh handles arm64's UEFI-only mkimg); overlay is
+      # vendored at ./overlay.
+      - name: Assemble disk.img (reuse staged base + built userland)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          ARCH: ${{ inputs.arch }}
+          BASE_TGZ: /tmp/base.tar.gz
+          KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-${{ inputs.arch }}.tar.gz
+          USERLAND_TGZ: /tmp/nextbsd-userland-${{ inputs.arch }}.tar.gz
+          OVERLAY: ${{ github.workspace }}/overlay
+          WORK: ${{ github.workspace }}/nbimg
+        run: |
+          mkdir -p art
+          gh release download continuous -R nextbsd-redux/nextbsd-kernel \
+            --pattern 'nextbsd-kernel-${{ inputs.arch }}.tar.gz' --dir art --clobber
+          gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+            --pattern '*kext*.tar.gz' --dir art --clobber || true
+          export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          chmod +x ci/assemble-image.sh
+          ./ci/assemble-image.sh
+
+      - name: Upload native-assembled image
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextbsd-ci-image-${{ inputs.arch }}
+          path: nbimg/out/disk.img
+
+  boot:
+    name: ci-image-boot (${{ inputs.arch }}, qemu)
+    needs: userland
+    # This lane's boot waits ONLY on this lane's build — the other arch's build
+    # is a separate called-workflow instance and never blocks it. boot=false
+    # skips the stage entirely (arm64 today: x86 runner can't KVM-boot aarch64).
+    if: ${{ inputs.boot && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4          # for the in-repo native tests/boot-test.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: nextbsd-ci-image-${{ inputs.arch }}
+          path: .
+      - name: Install qemu + expect + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+      # Use the IN-REPO native boot test (tests/boot-test.sh), NOT nextbsd's
+      # Apple-image one: the native FreeBSD-based image validates only the
+      # Darwin+Mach layer (the FreeBSD-component markers — FBSDGLUE, *-LEAF,
+      # PAM-* — were dropped; those test Apple ports this image doesn't ship).
+      - name: Boot test (native-assembled image, Darwin+Mach gate)
+        run: |
+          chmod +x tests/boot-test.sh
+          ./tests/boot-test.sh disk.img
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-image-boot-log-${{ inputs.arch }}
+          path: tests/boot.log
