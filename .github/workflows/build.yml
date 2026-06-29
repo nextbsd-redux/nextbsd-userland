@@ -43,7 +43,9 @@ jobs:
     with:
       arch: arm64
       target_arch: aarch64
-      boot: false                # native assembly smoke test only (no aarch64 boot yet)
+      boot: true                 # qemu-system-aarch64 on a native arm64 runner
+      boot_runner: ubuntu-24.04-arm
+      boot_soft: true            # non-gating first bring-up: WARN, don't block the PR
       fbsd_sha: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
     secrets: inherit
 

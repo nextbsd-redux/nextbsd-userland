@@ -22,7 +22,17 @@ on:
         required: true
         type: string
       boot:
-        description: 'run the qemu boot test for this arch (PR only). amd64 today.'
+        description: 'run the qemu boot test for this arch (PR only)'
+        required: false
+        default: false
+        type: boolean
+      boot_runner:
+        description: 'runner for the boot job (amd64 -> ubuntu-24.04; arm64 -> ubuntu-24.04-arm for native KVM)'
+        required: false
+        default: 'ubuntu-24.04'
+        type: string
+      boot_soft:
+        description: 'non-gating boot: a boot failure WARNs but does not fail the lane (first arm64 bring-up)'
         required: false
         default: false
         type: boolean
@@ -132,10 +142,12 @@ jobs:
     name: ci-image-boot (${{ inputs.arch }}, qemu)
     needs: userland
     # This lane's boot waits ONLY on this lane's build — the other arch's build
-    # is a separate called-workflow instance and never blocks it. boot=false
-    # skips the stage entirely (arm64 today: x86 runner can't KVM-boot aarch64).
+    # is a separate called-workflow instance and never blocks it.
     if: ${{ inputs.boot && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-24.04
+    # amd64: ubuntu-24.04 (x86). arm64: ubuntu-24.04-arm so qemu-system-aarch64
+    # can KVM-boot the aarch64 image natively (free on public repos); TCG is the
+    # fallback if /dev/kvm is absent.
+    runs-on: ${{ inputs.boot_runner }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4          # for the in-repo native tests/boot-test.sh
@@ -143,15 +155,24 @@ jobs:
         with:
           name: nextbsd-ci-image-${{ inputs.arch }}
           path: .
-      - name: Install qemu + expect + OVMF
+      - name: Install qemu + expect + UEFI firmware
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 expect ovmf
+          if [ "${{ inputs.arch }}" = arm64 ]; then
+            sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 expect
+          else
+            sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf expect
+          fi
       # Use the IN-REPO native boot test (tests/boot-test.sh), NOT nextbsd's
       # Apple-image one: the native FreeBSD-based image validates only the
       # Darwin+Mach layer (the FreeBSD-component markers — FBSDGLUE, *-LEAF,
       # PAM-* — were dropped; those test Apple ports this image doesn't ship).
+      # boot_soft (arm64's first bring-up) makes a failure non-gating: the log
+      # is still captured below, but the lane stays green while we shake it out.
       - name: Boot test (native-assembled image, Darwin+Mach gate)
+        continue-on-error: ${{ inputs.boot_soft }}
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
           chmod +x tests/boot-test.sh
           ./tests/boot-test.sh disk.img

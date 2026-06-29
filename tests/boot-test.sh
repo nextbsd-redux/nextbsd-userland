@@ -40,10 +40,33 @@ case "$IMG" in
     ;;
 esac
 
-echo "==> boot test: $IMG"
+ARCH="${ARCH:-amd64}"
+echo "==> boot test: $IMG  (arch=$ARCH)"
 ls -lh "$IMG"
 
-# Pick acceleration. KVM if available; TCG fallback.
+# Arch-specific qemu shape: binary, machine type, NIC model, TCG cpu, and the
+# UEFI firmware search path. amd64 = q35 + OVMF + e1000; arm64 = virt + AAVMF
+# (QEMU_EFI) + virtio-net. The expect script below consumes these via env.
+case "$ARCH" in
+  amd64)
+    QEMU=qemu-system-x86_64
+    MACHINE=q35
+    NET=e1000
+    TCG_CPU=qemu64
+    FW_CANDIDATES="/usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd /usr/share/qemu/OVMF.fd"
+    ;;
+  arm64|aarch64)
+    QEMU=qemu-system-aarch64
+    MACHINE=virt
+    NET=virtio-net-pci
+    TCG_CPU=max
+    FW_CANDIDATES="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI.fd"
+    ;;
+  *) echo "ERROR: unsupported ARCH=$ARCH" >&2; exit 1 ;;
+esac
+
+# Pick acceleration. KVM if available (native-arch runner); TCG fallback. On
+# arm64 the TCG cpu is 'max' (qemu64 is x86-only).
 if [ -e /dev/kvm ]; then
     sudo chmod 666 /dev/kvm 2>/dev/null || true
 fi
@@ -51,27 +74,22 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     ACCEL_FLAGS="-accel kvm -cpu host"
     echo "==> using KVM acceleration"
 else
-    ACCEL_FLAGS="-accel tcg,thread=single -cpu qemu64"
+    ACCEL_FLAGS="-accel tcg,thread=single -cpu $TCG_CPU"
     echo "==> using TCG (single-thread)"
 fi
 
-# Find OVMF firmware
-OVMF=""
-for f in /usr/share/OVMF/OVMF_CODE.fd \
-         /usr/share/ovmf/OVMF.fd \
-         /usr/share/qemu/OVMF.fd; do
-    if [ -f "$f" ]; then
-        OVMF="$f"
-        break
-    fi
+# Find the UEFI firmware for this arch.
+FW=""
+for f in $FW_CANDIDATES; do
+    if [ -f "$f" ]; then FW="$f"; break; fi
 done
-if [ -z "$OVMF" ]; then
-    echo "ERROR: no OVMF firmware found"
+if [ -z "$FW" ]; then
+    echo "ERROR: no UEFI firmware found for $ARCH (looked in: $FW_CANDIDATES)" >&2
     exit 1
 fi
-echo "==> using UEFI firmware: $OVMF"
+echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | nic: $NET"
 
-export ACCEL_FLAGS OVMF
+export ACCEL_FLAGS FW QEMU MACHINE NET
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -81,13 +99,13 @@ log_user 1
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 
-eval spawn qemu-system-x86_64 \
+eval spawn $env(QEMU) \
     -m 4G \
-    -machine q35 \
-    -bios $env(OVMF) \
+    -machine $env(MACHINE) \
+    -bios $env(FW) \
     $accel_flags \
     -drive file=$img,format=raw,if=virtio \
-    -nic user,model=e1000 \
+    -nic user,model=$env(NET) \
     -display none -serial stdio \
     -no-reboot
 
@@ -105,7 +123,7 @@ expect {
     }
     -re "Hit \\\[Enter\\\]" { send " " }
     "Booting"                { send " " }
-    "FreeBSD/amd64 EFI"      { send " " }
+    -re "FreeBSD/\[a-z0-9\]+ EFI" { send " " }
 }
 
 expect {
