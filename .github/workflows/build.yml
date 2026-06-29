@@ -198,3 +198,69 @@ jobs:
           gh api repos/nextbsd-redux/nextbsd-pkg/dispatches \
             -f event_type=userland-updated \
             -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha }}"
+
+  # ----------------------------------------------------------------------------
+  # SPIKE (build-only measurement — DO NOT MERGE AS-IS): cross-build the vendored
+  # cpdup and time it, per arch, to size the cost of adding it to NextBSD.
+  # Fully isolated: its own job, builds into /tmp, NEVER writes /stage, NEVER
+  # touches the published `continuous` artifact or the downstream cascade.
+  # Read the cost from this job's "Build cpdup (timed)" step duration (and the
+  # `time` line in its log). Sources vendored at src/cpdup (DragonFly v1.22,
+  # BSD-3-Clause). Runs on PRs only.
+  measure-cpdup:
+    name: measure cpdup (${{ matrix.target }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: amd64
+            target_arch: amd64
+          - target: arm64
+            target_arch: aarch64
+    container:
+      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same sysroot the real userland build links against (compat continuous
+      # base: libc/libsys + headers). cpdup is C / libc-only, so this is plenty.
+      - name: Stage sysroot from compat continuous
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/sysroot"
+          gh release download continuous \
+            --repo nextbsd-redux/nextbsd-freebsd-compat \
+            --pattern "nextbsd-base-${{ matrix.target }}.tar.gz" \
+            --output /tmp/base.tar.gz --clobber
+          tar -C "$GITHUB_WORKSPACE/sysroot" -xzf /tmp/base.tar.gz
+
+      # cpdup cross-compile, timed. Mirrors build-userland.sh's cross idiom
+      # (clang --target=<triple> --ld-path=ld.lld). -DNOMD5 drops the only
+      # OpenSSL use (src/md5.c is therefore excluded) -> no extra libs.
+      # -D_ST_FLAGS_PRESENT_ matches cpdup's FreeBSD path (chflags/st_flags).
+      - name: Build cpdup (timed)
+        env:
+          T: ${{ matrix.target }}
+          SYSROOT: ${{ github.workspace }}/sysroot
+        run: |
+          set -eu
+          case "$T" in
+            amd64) TRIPLE=x86_64-unknown-freebsd ;;
+            arm64) TRIPLE=aarch64-unknown-freebsd ;;
+          esac
+          CC="$CROSS_BINDIR/clang --target=$TRIPLE --sysroot=$SYSROOT --ld-path=$CROSS_BINDIR/ld.lld"
+          echo "==> cpdup cross-build  T=$T  TRIPLE=$TRIPLE"
+          echo "::group::compile+link (timed)"
+          time $CC -O2 -std=c99 -DNOMD5 -D_ST_FLAGS_PRESENT_ \
+            -o /tmp/cpdup-"$T" \
+            src/cpdup/src/cpdup.c \
+            src/cpdup/src/hclink.c \
+            src/cpdup/src/hcproto.c \
+            src/cpdup/src/misc.c
+          echo "::endgroup::"
+          ls -lh /tmp/cpdup-"$T"
+          "$CROSS_BINDIR/llvm-readelf" -h /tmp/cpdup-"$T" 2>/dev/null \
+            | grep -E 'Class|Machine' || true
