@@ -14,3 +14,6 @@ sysroot/
 # CI scratch
 artifacts/
 out/
+tests/boot.log
+tests/boot.exp
+tests/disk.img

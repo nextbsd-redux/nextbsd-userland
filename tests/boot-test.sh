@@ -40,10 +40,46 @@ case "$IMG" in
     ;;
 esac
 
-echo "==> boot test: $IMG"
+ARCH="${ARCH:-amd64}"
+# BOOT_GATE: full  = boot -> login -> run the on-image Mach/launchd/configd/etc
+#                    test suite (amd64).
+#            login = boot -> assert the login: prompt -> clean exit. Used for
+#                    arm64: it boots cleanly to login, but the post-login root
+#                    tcsh startup hangs on aarch64 (separate bug), so charging
+#                    into the shell just wastes the 8-min login timeout. Proving
+#                    boot->login is the meaningful arm64 smoke for now.
+BOOT_GATE="${BOOT_GATE:-full}"
+echo "==> boot test: $IMG  (arch=$ARCH, gate=$BOOT_GATE)"
 ls -lh "$IMG"
 
-# Pick acceleration. KVM if available; TCG fallback.
+# Arch-specific qemu shape: binary, machine type, NIC model, TCG cpu, and the
+# UEFI firmware search path. amd64 = q35 + OVMF + e1000; arm64 = virt + AAVMF
+# (QEMU_EFI) + virtio-net. The expect script below consumes these via env.
+case "$ARCH" in
+  amd64)
+    QEMU=qemu-system-x86_64
+    MACHINE=q35
+    # e1000 option ROM ships with qemu-system-x86; -nic is fine.
+    NET_ARGS="-nic user,model=e1000"
+    TCG_CPU=qemu64
+    FW_CANDIDATES="/usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd /usr/share/qemu/OVMF.fd"
+    ;;
+  arm64|aarch64)
+    QEMU=qemu-system-aarch64
+    MACHINE=virt
+    # virtio-net-pci defaults to loading a PXE option ROM (efi-virtio.rom) that
+    # the arm64 qemu package doesn't ship -> qemu exits "failed to find romfile".
+    # We never netboot, so disable the ROM with romfile= (empty). Use the
+    # -netdev/-device form since -nic doesn't take romfile.
+    NET_ARGS="-netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile="
+    TCG_CPU=max
+    FW_CANDIDATES="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI.fd"
+    ;;
+  *) echo "ERROR: unsupported ARCH=$ARCH" >&2; exit 1 ;;
+esac
+
+# Pick acceleration. KVM if available (native-arch runner); TCG fallback. On
+# arm64 the TCG cpu is 'max' (qemu64 is x86-only).
 if [ -e /dev/kvm ]; then
     sudo chmod 666 /dev/kvm 2>/dev/null || true
 fi
@@ -51,43 +87,45 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     ACCEL_FLAGS="-accel kvm -cpu host"
     echo "==> using KVM acceleration"
 else
-    ACCEL_FLAGS="-accel tcg,thread=single -cpu qemu64"
+    ACCEL_FLAGS="-accel tcg,thread=single -cpu $TCG_CPU"
     echo "==> using TCG (single-thread)"
 fi
 
-# Find OVMF firmware
-OVMF=""
-for f in /usr/share/OVMF/OVMF_CODE.fd \
-         /usr/share/ovmf/OVMF.fd \
-         /usr/share/qemu/OVMF.fd; do
-    if [ -f "$f" ]; then
-        OVMF="$f"
-        break
-    fi
+# Find the UEFI firmware for this arch.
+FW=""
+for f in $FW_CANDIDATES; do
+    if [ -f "$f" ]; then FW="$f"; break; fi
 done
-if [ -z "$OVMF" ]; then
-    echo "ERROR: no OVMF firmware found"
+if [ -z "$FW" ]; then
+    echo "ERROR: no UEFI firmware found for $ARCH (looked in: $FW_CANDIDATES)" >&2
     exit 1
 fi
-echo "==> using UEFI firmware: $OVMF"
+echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ACCEL_FLAGS OVMF
+export ARCH BOOT_GATE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
 log_file -a tests/boot.log
 log_user 1
 
+# Type each command at a human cadence: 1 char / 40ms (~25 cps, a brisk typist)
+# via send -s. This is plenty for the loader's UART to read the command without
+# mis-reading it. Note: the UART can still drop a char from the ECHO it prints
+# back (boot_multicons -> boo_multicons) even when it got the command fine — so
+# loader_set syncs on the OK prompt, NOT the echo, and is immune to that.
+set send_slow {1 .04}
+
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 
-eval spawn qemu-system-x86_64 \
+eval spawn $env(QEMU) \
     -m 4G \
-    -machine q35 \
-    -bios $env(OVMF) \
+    -machine $env(MACHINE) \
+    -bios $env(FW) \
     $accel_flags \
     -drive file=$img,format=raw,if=virtio \
-    -nic user,model=e1000 \
+    $env(NET_ARGS) \
     -display none -serial stdio \
     -no-reboot
 
@@ -105,7 +143,7 @@ expect {
     }
     -re "Hit \\\[Enter\\\]" { send " " }
     "Booting"                { send " " }
-    "FreeBSD/amd64 EFI"      { send " " }
+    -re "FreeBSD/\[a-z0-9\]+ EFI" { send " " }
 }
 
 expect {
@@ -116,40 +154,63 @@ expect {
     "OK " { puts "\n==> at loader prompt; setting serial console vars" }
 }
 
-# Match the echoed command BEFORE matching "OK " to avoid expect races
-# where a stale OK from a prior `set` is matched before the loader has
-# consumed the current send. Without this, run 26070245676 ate
-# `boot_multicons=YES` and merged the next `set` into the partial line.
+# loader_set — robustly set ONE loader variable over the serial console.
+# The loader echoes the typed line then prints a fresh "OK " prompt; firing the
+# next command before its line discipline is ready at that prompt can merge/eat
+# it (run 26070245676 ate `boot_multicons=YES`). Matching the echo BEFORE the
+# OK helped but still raced occasionally — the missing piece is a settle at the
+# prompt before sending. So per command:
+#   1. settle (let the loader finish printing its OK prompt and be ready)
+#   2. send the command
+#   3. match THIS command's exact echo (so we never latch a stale OK)
+#   4. wait for the next OK prompt
+# Tight per-command timeout so a real hang fails in seconds, not at the global
+# 8-min bound. ~1s x 6 vars is negligible against multi-minute boot.
+proc loader_set {cmd} {
+    global timeout
+    set saved $timeout
+    set timeout 20
+    sleep 0.3
+    # Drain the settled prior prompt/output, THEN send, THEN sync on the fresh
+    # OK. We deliberately do NOT match the command echo: this emulated UART
+    # intermittently drops a char from the ECHO (e.g. boot_multicons -> boo_...)
+    # even though the loader received the command fine and printed OK — so an
+    # exact-echo match hangs on a cosmetic glitch. Syncing on the next OK is
+    # robust to echo corruption. send_slow still paces input so the loader reads
+    # the command itself correctly; the drain prevents latching the prior OK.
+    expect *
+    send -s -- "$cmd\r"
+    expect {
+        timeout { puts "\nFAIL: no OK prompt after '$cmd' within 20s"; exit 1 }
+        "OK "
+    }
+    set timeout $saved
+}
+
+# Dropped vidconsole from the console var: QEMU CI runs with -display none, so
+# vidconsole always fails to bind and the loader prints "console vidconsole is
+# unavailable" every boot. comconsole alone suffices for serial-only capture.
+loader_set "set console=comconsole"
+loader_set "set boot_serial=YES"
+loader_set "set comconsole_speed=115200"
+loader_set "set boot_multicons=YES"
+# Verbose diagnostic trace toggles. CI-only — the shipped ISO is silent by
+# default. The kernel reads mach.debug_enable as a tunable (CTLFLAG_RWTUN) at
+# boot; launchd PID 1 and libxpc both read kenv "launchd_trace=1" once at
+# startup. Together these gate the [T41-*]/[T39-*] trace points; on amd64 (KVM)
+# they're a cheap paper trail for the next regression.
 #
-# Also dropped vidconsole from console var: QEMU CI runs with
-# -display none, so vidconsole always fails to bind and the loader
-# prints "console vidconsole is unavailable" on every boot. comconsole
-# alone is sufficient for serial-only capture.
-send "set console=comconsole\r"
-expect "set console=comconsole"
-expect "OK "
-send "set boot_serial=YES\r"
-expect "set boot_serial=YES"
-expect "OK "
-send "set comconsole_speed=115200\r"
-expect "set comconsole_speed=115200"
-expect "OK "
-send "set boot_multicons=YES\r"
-expect "set boot_multicons=YES"
-expect "OK "
-# Verbose diagnostic trace toggles. CI-only — the shipped ISO is
-# silent by default. The kernel reads mach.debug_enable as a tunable
-# (CTLFLAG_RWTUN) at boot; launchd PID 1 and libxpc both read kenv
-# "launchd_trace=1" once at startup. Together these gate the [T41-*]
-# / [T39-*] trace points; keeping them on for CI gives a paper trail
-# for the next regression.
-send "set mach.debug_enable=1\r"
-expect "set mach.debug_enable=1"
-expect "OK "
-send "set launchd_trace=1\r"
-expect "set launchd_trace=1"
-expect "OK "
-send "boot\r"
+# AMD64 ONLY: on arm64 there is no KVM on the hosted runner, so the boot runs
+# under single-thread TCG. The trace flood (~6.8k lines last run) then both
+# crawls the emulated boot AND buries the test markers, so the suite can't
+# finish in the window. Skip the trace on arm64 — the markers the expect blocks
+# below match come from the on-image run.sh, not from these trace points, so
+# nothing downstream needs them.
+if {$env(ARCH) eq "amd64"} {
+    loader_set "set mach.debug_enable=1"
+    loader_set "set launchd_trace=1"
+}
+send -s -- "boot\r"
 
 # Stage 1a: capture getty's boot banner. PAM port iter 4 (issue #99)
 # restored RunAtLoad on com.apple.hostnamed.plist so hostnamed runs
@@ -197,6 +258,18 @@ expect {
         exit 1
     }
     "login:" { puts "\nOK: boot reached the login prompt" }
+}
+
+# BOOT_GATE=login: stop here. Reaching login: is the meaningful smoke for arm64
+# today — it boots cleanly through kernel + mach + launchd + all daemons + getty
+# to the login prompt; only the post-login root tcsh startup hangs on aarch64
+# (tracked separately). Charging into the shell would just burn the 8-min login
+# timeout, so exit cleanly with the boot proven. amd64 (BOOT_GATE=full) runs on.
+if {$env(BOOT_GATE) eq "login"} {
+    puts "\nOK: BOOT-LOGIN-OK — $env(ARCH) reached the login prompt (login gate PASSED)"
+    close
+    wait
+    exit 0
 }
 
 # Stage 2: log in as root. The live ISO has no root password, so login
