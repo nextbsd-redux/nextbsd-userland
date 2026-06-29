@@ -101,12 +101,12 @@ set timeout 480
 log_file -a tests/boot.log
 log_user 1
 
-# Pace console keystrokes so the loader reads each command correctly (send -s).
-# Note: the emulated UART can still drop a char from the ECHO it prints back
-# (e.g. boot_multicons -> boo_multicons) even when it received the command fine
-# — so loader_set syncs on the OK prompt, NOT the echo. Pacing input at 1
-# char / 50ms keeps the loader from mis-reading the actual command.
-set send_slow {1 .05}
+# Type each command at a human cadence: 1 char / 40ms (~25 cps, a brisk typist)
+# via send -s. This is plenty for the loader's UART to read the command without
+# mis-reading it. Note: the UART can still drop a char from the ECHO it prints
+# back (boot_multicons -> boo_multicons) even when it got the command fine — so
+# loader_set syncs on the OK prompt, NOT the echo, and is immune to that.
+set send_slow {1 .04}
 
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
@@ -162,7 +162,7 @@ proc loader_set {cmd} {
     global timeout
     set saved $timeout
     set timeout 20
-    sleep 1
+    sleep 0.3
     # Drain the settled prior prompt/output, THEN send, THEN sync on the fresh
     # OK. We deliberately do NOT match the command echo: this emulated UART
     # intermittently drops a char from the ECHO (e.g. boot_multicons -> boo_...)
