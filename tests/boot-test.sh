@@ -101,6 +101,14 @@ set timeout 480
 log_file -a tests/boot.log
 log_user 1
 
+# Throttle console keystrokes. The loader's UART echoes input char-by-char and
+# drops characters when a whole command lands as one burst (KVM is fast enough
+# to overrun it) — that's what made `set launchd_trace=1` echo as `set
+# launchd_tra` and miss the match. send_slow paces `send -s` to 1 char / 30ms,
+# which the loader keeps up with. This is the ROOT cause of the intermittent
+# loader race; the per-command settle in loader_set is belt-and-suspenders.
+set send_slow {1 .03}
+
 set img [lindex $argv 0]
 set accel_flags [split $env(ACCEL_FLAGS) " "]
 
@@ -156,7 +164,7 @@ proc loader_set {cmd} {
     set saved $timeout
     set timeout 20
     sleep 1
-    send -- "$cmd\r"
+    send -s -- "$cmd\r"
     expect {
         timeout { puts "\nFAIL: loader did not echo '$cmd' within 20s"; exit 1 }
         -ex $cmd
@@ -182,7 +190,7 @@ loader_set "set boot_multicons=YES"
 # for CI gives a paper trail for the next regression.
 loader_set "set mach.debug_enable=1"
 loader_set "set launchd_trace=1"
-send "boot\r"
+send -s -- "boot\r"
 
 # Stage 1a: capture getty's boot banner. PAM port iter 4 (issue #99)
 # restored RunAtLoad on com.apple.hostnamed.plist so hostnamed runs
