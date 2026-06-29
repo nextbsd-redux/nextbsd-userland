@@ -51,14 +51,19 @@ case "$ARCH" in
   amd64)
     QEMU=qemu-system-x86_64
     MACHINE=q35
-    NET=e1000
+    # e1000 option ROM ships with qemu-system-x86; -nic is fine.
+    NET_ARGS="-nic user,model=e1000"
     TCG_CPU=qemu64
     FW_CANDIDATES="/usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd /usr/share/qemu/OVMF.fd"
     ;;
   arm64|aarch64)
     QEMU=qemu-system-aarch64
     MACHINE=virt
-    NET=virtio-net-pci
+    # virtio-net-pci defaults to loading a PXE option ROM (efi-virtio.rom) that
+    # the arm64 qemu package doesn't ship -> qemu exits "failed to find romfile".
+    # We never netboot, so disable the ROM with romfile= (empty). Use the
+    # -netdev/-device form since -nic doesn't take romfile.
+    NET_ARGS="-netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile="
     TCG_CPU=max
     FW_CANDIDATES="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI.fd"
     ;;
@@ -87,9 +92,9 @@ if [ -z "$FW" ]; then
     echo "ERROR: no UEFI firmware found for $ARCH (looked in: $FW_CANDIDATES)" >&2
     exit 1
 fi
-echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | nic: $NET"
+echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ACCEL_FLAGS FW QEMU MACHINE NET
+export ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -105,7 +110,7 @@ eval spawn $env(QEMU) \
     -bios $env(FW) \
     $accel_flags \
     -drive file=$img,format=raw,if=virtio \
-    -nic user,model=$env(NET) \
+    $env(NET_ARGS) \
     -display none -serial stdio \
     -no-reboot
 
@@ -134,39 +139,49 @@ expect {
     "OK " { puts "\n==> at loader prompt; setting serial console vars" }
 }
 
-# Match the echoed command BEFORE matching "OK " to avoid expect races
-# where a stale OK from a prior `set` is matched before the loader has
-# consumed the current send. Without this, run 26070245676 ate
-# `boot_multicons=YES` and merged the next `set` into the partial line.
-#
-# Also dropped vidconsole from console var: QEMU CI runs with
-# -display none, so vidconsole always fails to bind and the loader
-# prints "console vidconsole is unavailable" on every boot. comconsole
-# alone is sufficient for serial-only capture.
-send "set console=comconsole\r"
-expect "set console=comconsole"
-expect "OK "
-send "set boot_serial=YES\r"
-expect "set boot_serial=YES"
-expect "OK "
-send "set comconsole_speed=115200\r"
-expect "set comconsole_speed=115200"
-expect "OK "
-send "set boot_multicons=YES\r"
-expect "set boot_multicons=YES"
-expect "OK "
-# Verbose diagnostic trace toggles. CI-only — the shipped ISO is
-# silent by default. The kernel reads mach.debug_enable as a tunable
-# (CTLFLAG_RWTUN) at boot; launchd PID 1 and libxpc both read kenv
-# "launchd_trace=1" once at startup. Together these gate the [T41-*]
-# / [T39-*] trace points; keeping them on for CI gives a paper trail
-# for the next regression.
-send "set mach.debug_enable=1\r"
-expect "set mach.debug_enable=1"
-expect "OK "
-send "set launchd_trace=1\r"
-expect "set launchd_trace=1"
-expect "OK "
+# loader_set — robustly set ONE loader variable over the serial console.
+# The loader echoes the typed line then prints a fresh "OK " prompt; firing the
+# next command before its line discipline is ready at that prompt can merge/eat
+# it (run 26070245676 ate `boot_multicons=YES`). Matching the echo BEFORE the
+# OK helped but still raced occasionally — the missing piece is a settle at the
+# prompt before sending. So per command:
+#   1. settle (let the loader finish printing its OK prompt and be ready)
+#   2. send the command
+#   3. match THIS command's exact echo (so we never latch a stale OK)
+#   4. wait for the next OK prompt
+# Tight per-command timeout so a real hang fails in seconds, not at the global
+# 8-min bound. ~1s x 6 vars is negligible against multi-minute boot.
+proc loader_set {cmd} {
+    global timeout
+    set saved $timeout
+    set timeout 20
+    sleep 1
+    send -- "$cmd\r"
+    expect {
+        timeout { puts "\nFAIL: loader did not echo '$cmd' within 20s"; exit 1 }
+        -ex $cmd
+    }
+    expect {
+        timeout { puts "\nFAIL: no OK prompt after '$cmd' within 20s"; exit 1 }
+        "OK "
+    }
+    set timeout $saved
+}
+
+# Dropped vidconsole from the console var: QEMU CI runs with -display none, so
+# vidconsole always fails to bind and the loader prints "console vidconsole is
+# unavailable" every boot. comconsole alone suffices for serial-only capture.
+loader_set "set console=comconsole"
+loader_set "set boot_serial=YES"
+loader_set "set comconsole_speed=115200"
+loader_set "set boot_multicons=YES"
+# Verbose diagnostic trace toggles. CI-only — the shipped ISO is silent by
+# default. The kernel reads mach.debug_enable as a tunable (CTLFLAG_RWTUN) at
+# boot; launchd PID 1 and libxpc both read kenv "launchd_trace=1" once at
+# startup. Together these gate the [T41-*]/[T39-*] trace points; keeping them on
+# for CI gives a paper trail for the next regression.
+loader_set "set mach.debug_enable=1"
+loader_set "set launchd_trace=1"
 send "boot\r"
 
 # Stage 1a: capture getty's boot banner. PAM port iter 4 (issue #99)
