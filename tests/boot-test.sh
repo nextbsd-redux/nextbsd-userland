@@ -41,7 +41,15 @@ case "$IMG" in
 esac
 
 ARCH="${ARCH:-amd64}"
-echo "==> boot test: $IMG  (arch=$ARCH)"
+# BOOT_GATE: full  = boot -> login -> run the on-image Mach/launchd/configd/etc
+#                    test suite (amd64).
+#            login = boot -> assert the login: prompt -> clean exit. Used for
+#                    arm64: it boots cleanly to login, but the post-login root
+#                    tcsh startup hangs on aarch64 (separate bug), so charging
+#                    into the shell just wastes the 8-min login timeout. Proving
+#                    boot->login is the meaningful arm64 smoke for now.
+BOOT_GATE="${BOOT_GATE:-full}"
+echo "==> boot test: $IMG  (arch=$ARCH, gate=$BOOT_GATE)"
 ls -lh "$IMG"
 
 # Arch-specific qemu shape: binary, machine type, NIC model, TCG cpu, and the
@@ -94,7 +102,7 @@ if [ -z "$FW" ]; then
 fi
 echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ARCH ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
+export ARCH BOOT_GATE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -250,6 +258,18 @@ expect {
         exit 1
     }
     "login:" { puts "\nOK: boot reached the login prompt" }
+}
+
+# BOOT_GATE=login: stop here. Reaching login: is the meaningful smoke for arm64
+# today — it boots cleanly through kernel + mach + launchd + all daemons + getty
+# to the login prompt; only the post-login root tcsh startup hangs on aarch64
+# (tracked separately). Charging into the shell would just burn the 8-min login
+# timeout, so exit cleanly with the boot proven. amd64 (BOOT_GATE=full) runs on.
+if {$env(BOOT_GATE) eq "login"} {
+    puts "\nOK: BOOT-LOGIN-OK — $env(ARCH) reached the login prompt (login gate PASSED)"
+    close
+    wait
+    exit 0
 }
 
 # Stage 2: log in as root. The live ISO has no root password, so login

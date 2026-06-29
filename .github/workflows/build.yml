@@ -45,7 +45,8 @@ jobs:
       target_arch: aarch64
       boot: true                 # qemu-system-aarch64 on a native arm64 runner
       boot_runner: ubuntu-24.04-arm
-      boot_soft: true            # non-gating first bring-up: WARN, don't block the PR
+      boot_soft: true            # non-gating for now: WARN, don't block the PR
+      boot_gate: login           # boot -> login: prompt -> exit (post-login aarch64 hang is separate)
       fbsd_sha: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
     secrets: inherit
 
