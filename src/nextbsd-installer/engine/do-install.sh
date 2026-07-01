@@ -90,14 +90,34 @@ done
 progress 88
 
 # --- 6. Make the disk bootable ----------------------------------------------
-status "Installing bootcode (BIOS gptboot + UEFI loader)"
-run gpart bootcode -b "$MNT/boot/pmbr" -p "$MNT/boot/gptboot" -i 1 "$DISK"
-# Populate the ESP with the EFI loader.
+status "Installing bootcode (UEFI loader + BIOS gptboot if present)"
+# BIOS bootcode only when the boot blocks exist (amd64 legacy). EFI-only boxes
+# and arm64 ship no pmbr/gptboot — skip instead of failing; the ESP loader below
+# is what boots UEFI machines.
+if [ -f "$MNT/boot/pmbr" ] && [ -f "$MNT/boot/gptboot" ]; then
+	run gpart bootcode -b "$MNT/boot/pmbr" -p "$MNT/boot/gptboot" -i 1 "$DISK"
+else
+	status "No BIOS boot blocks present (EFI-only) — skipping gptboot"
+fi
+# Populate the ESP with the EFI loader at the firmware removable-media path
+# (works with no NVRAM entry). arm64 firmware looks for BOOTAA64.EFI, amd64 for
+# BOOTX64.EFI.
+case "$(uname -m)" in
+	arm64|aarch64) EFIFILE=BOOTAA64.EFI ;;
+	*)             EFIFILE=BOOTX64.EFI  ;;
+esac
 EFIMNT=/tmp/nbi-efi
 run mkdir -p "$EFIMNT" "$MNT/boot/efi"
 run mount -t msdosfs "/dev/${DISK}p2" "$EFIMNT"
 run mkdir -p "$EFIMNT/EFI/BOOT"
-run cp "$MNT/boot/loader.efi" "$EFIMNT/EFI/BOOT/BOOTX64.EFI"
+run cp "$MNT/boot/loader.efi" "$EFIMNT/EFI/BOOT/$EFIFILE"
+# Best-effort named UEFI boot entry (non-fatal: the removable path above already
+# boots if the firmware ignores or loses NVRAM entries, e.g. after a CMOS reset).
+if [ "${NEXTBSD_DRYRUN:-0}" != 1 ] && command -v efibootmgr >/dev/null 2>&1; then
+	efibootmgr --create --activate --label NextBSD \
+		--loader "$EFIMNT/EFI/BOOT/$EFIFILE" >/dev/null 2>&1 || \
+		status "efibootmgr entry skipped (removable-path boot still installed)"
+fi
 run umount "$EFIMNT"
 progress 94
 

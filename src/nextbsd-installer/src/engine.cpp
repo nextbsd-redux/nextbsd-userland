@@ -217,6 +217,7 @@ bool run_install(AppState& st,
 
   int pct = 0;
   std::string status;
+  std::string last_raw;  // most recent non-record line — usually the real error
   char buf[8192];
   while (fgets(buf, sizeof buf, f)) {
     std::string line(buf);
@@ -229,8 +230,11 @@ bool run_install(AppState& st,
     } else if (fld.size() >= 2 && fld[0] == "STATUS") {
       status = fld[1];
       progress(pct, status);
+    } else if (!line.empty() && line != "DONE") {
+      // Anything else (2>&1 stderr from gpart/newfs/mount/cpdup/pw) — keep the
+      // latest so a failure reports WHY, not just which stage it died in.
+      last_raw = line;
     }
-    // Other lines (e.g. "DRYRUN: …", engine errors) are not progress records.
   }
   int rc = pclose(f);
   if (!passfile.empty()) ::unlink(passfile.c_str());
@@ -243,6 +247,7 @@ bool run_install(AppState& st,
   st.fail_stage = status.empty()
                       ? ("install engine exited with code " + std::to_string(code))
                       : ("failed: " + status);
+  if (!last_raw.empty()) st.fail_stage += "  (" + last_raw + ")";
   return false;
 }
 
