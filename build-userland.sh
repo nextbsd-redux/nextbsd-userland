@@ -713,6 +713,7 @@ rm -rf "$NBI_BUILD"; mkdir -p "$NBI_BUILD"
 cmake -G Ninja -S "$SRC/nextbsd-installer" -B "$NBI_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+    -DCMAKE_INSTALL_PREFIX=/ \
     -DCMAKE_BUILD_TYPE=Release
 DESTDIR="$DESTDIR" ninja -C "$NBI_BUILD" install
 test -x "$DESTDIR/usr/sbin/nextbsd-installer" || { echo "FAIL: /usr/sbin/nextbsd-installer not installed"; exit 1; }
