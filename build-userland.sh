@@ -681,6 +681,44 @@ echo "==> hostnamed built"
 # DROPPED: hostnametest/hostnameprefset/hostnamedhcpset/hostnamedmdnsset
 #          (all host-exec CI fixtures — moved to the boot test).
 
+# ---- cpdup + nextbsd-installer (the on-target installer) --------------------
+# The FTXUI TUI installer clones the running system onto the target disk with
+# cpdup. Both are vendored under src/ but were not previously built; wired in
+# here so they ship in the image for on-target install testing.
+#
+# cpdup: upstream uses a GNU make + pkg-config Makefile (Linux-shaped, pulls in
+# libbsd-overlay). Cross that doesn't fit run_buildenv (bmake) — so hand-link
+# with the cross clang like ioreg. -std=gnu99 keeps FreeBSD header visibility
+# (st_flags, u_int, ...); -D_ST_FLAGS_PRESENT_ is the upstream FreeBSD knob; its
+# MD5 (src/md5.c hard-includes <openssl/md5.h>) resolves against the base
+# libcrypto. Lands on PATH at /usr/bin so do-install.sh finds `cpdup` bare.
+comp "cpdup [cross hand-link]"
+mkdir -p "$DESTDIR/usr/bin"
+$CROSS_CC --sysroot="$SYSROOT" -O -pipe -std=gnu99 -D_ST_FLAGS_PRESENT_ \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib" \
+    -o "$DESTDIR/usr/bin/cpdup" "$SRC/cpdup/src/"*.c -lcrypto
+test -x "$DESTDIR/usr/bin/cpdup" || { echo "FAIL: /usr/bin/cpdup not installed"; exit 1; }
+
+# nextbsd-installer: CMake C++ — the FIRST C++ program in the pipeline. Its
+# CMakeLists add_subdirectory()s the vendored ../ftxui and links it statically,
+# so ftxui needs no stanza of its own (and its examples/docs/tests are forced
+# OFF). The C++ runtime (libc++/libcxxrt/libcompiler_rt/libthr) comes from the
+# compat base. Install rules place the binary in usr/sbin and the shell engine
+# (do-install.sh + probe-disks.sh) in usr/libexec/nextbsd-installer, matching the
+# baked NBI_LIBEXEC_DEFAULT. THREADS_PREFER_PTHREAD_FLAG avoids a cross FindThreads
+# miss on FreeBSD's libthr.
+comp "nextbsd-installer [cmake cross, C++ + vendored ftxui]"
+NBI_BUILD="$ROOT/.build/nextbsd-installer-$T"
+rm -rf "$NBI_BUILD"; mkdir -p "$NBI_BUILD"
+cmake -G Ninja -S "$SRC/nextbsd-installer" -B "$NBI_BUILD" \
+    -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN" \
+    -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+    -DCMAKE_INSTALL_PREFIX=/ \
+    -DCMAKE_BUILD_TYPE=Release
+DESTDIR="$DESTDIR" ninja -C "$NBI_BUILD" install
+test -x "$DESTDIR/usr/sbin/nextbsd-installer" || { echo "FAIL: /usr/sbin/nextbsd-installer not installed"; exit 1; }
+test -f "$DESTDIR/usr/libexec/nextbsd-installer/do-install.sh" || { echo "FAIL: installer engine (do-install.sh) not installed"; exit 1; }
+
 # =============================================================================
 # TIER 3 — on-image test binaries (freebsd-launchd-mach suite).
 # build.sh builds these natively and installs them to
