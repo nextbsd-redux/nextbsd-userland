@@ -12,18 +12,34 @@
 # Read-only: this only inspects GEOM/CAM, it never writes. FreeBSD-only.
 set -eu
 
-# The booted install medium (cd or the USB the live image was written to), so
-# the front-end can lock it. Best-effort: the cd9660 label node or cd0.
+# The booted install medium — locked in the front-end so you can't install onto
+# what you booted. Two sources: a cd9660/cd node, AND the physical disk backing
+# the live root (/). The common case is a USB the image was written to (e.g.
+# da0), which the old cd-only check missed — so it was offered as a target.
 media=""
 for d in /dev/iso9660/* /dev/cd0; do
 	[ -e "$d" ] || continue
 	media="${d##*/}"
 	break
 done
-[ -n "$media" ] && printf 'MEDIA\t%s\n' "$media"
+# Resolve the disk under / through glabel (e.g. ufs/ROOTFS -> da0p3 -> da0).
+root_prov="$(mount -p 2>/dev/null | awk '$2=="/"{print $1; exit}')"
+root_prov="${root_prov#/dev/}"
+boot_disk="$(glabel status 2>/dev/null | awk -v L="$root_prov" '$1==L{print $3; exit}')"
+[ -z "$boot_disk" ] && boot_disk="$root_prov"
+boot_disk="$(printf '%s' "$boot_disk" | sed -E 's/[ps][0-9]+$//')"
+[ -n "$media" ]     && printf 'MEDIA\t%s\n' "$media"
+[ -n "$boot_disk" ] && printf 'MEDIA\t%s\n' "$boot_disk"
 
-# DMI product, for the hostname suggestion.
-model="$(kenv -q smbios.system.product 2>/dev/null || true)"
+# DMI model for the hostname suggestion. Lenovo puts the friendly name
+# ("ThinkPad T460s") in smbios.system.version and the bare MTM code
+# ("20FAS0GL00") in system.product; most other vendors use system.product.
+dmi_maker="$(kenv -q smbios.system.maker 2>/dev/null || true)"
+case "$dmi_maker" in
+	*[Ll][Ee][Nn][Oo][Vv][Oo]*) model="$(kenv -q smbios.system.version 2>/dev/null || true)" ;;
+	*)                            model="$(kenv -q smbios.system.product 2>/dev/null || true)" ;;
+esac
+[ -z "$model" ] && model="$(kenv -q smbios.system.product 2>/dev/null || true)"
 [ -n "$model" ] && printf 'DMI\t%s\n' "$model"
 
 # One DISK line per kern.disks entry, with size + model, then its volumes.
@@ -37,7 +53,7 @@ for dev in $(sysctl -n kern.disks 2>/dev/null); do
 		printf "%.0f %s", b/s, u }')"
 	model="$(diskinfo -v "$dev" 2>/dev/null | awk -F'#' '/Disk descr/{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')"
 	is_media=0
-	[ "$dev" = "$media" ] && is_media=1
+	{ [ "$dev" = "$media" ] || [ "$dev" = "$boot_disk" ]; } && is_media=1
 	printf 'DISK\t%s\t%s\t%s\t%d\n' "$dev" "${size:-?}" "${model:-disk}" "$is_media"
 
 	# Volumes: GPT partitions with their labels + fs type.
