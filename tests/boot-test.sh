@@ -576,6 +576,18 @@ expect {
 
 expect {
     timeout {
+        puts "\nFAIL: SERVICE-LDCONFIG marker not seen"
+        exit 1
+    }
+    "SERVICE-LDCONFIG-FAIL" {
+        puts "\nFAIL: service ldconfig onestart failed / hints not rewritten"
+        exit 1
+    }
+    "SERVICE-LDCONFIG-OK" { puts "\nOK: service(8) drives the ldconfig rc.d job" }
+}
+
+expect {
+    timeout {
         puts "\nFAIL: CONFIGD-STORE marker not seen"
         exit 1
     }
