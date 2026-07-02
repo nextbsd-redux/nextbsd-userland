@@ -162,6 +162,20 @@ fixup_rootfs() {
         echo "WARN: no $etc/master.passwd — login will have no users" >&2
     fi
     [ -f "$etc/login.conf" ] && { cap_mkdb "$etc/login.conf" || echo "WARN: cap_mkdb failed" >&2; }
+    # TLS trust anchor: the base ships the raw certs in /usr/share/certs/trusted
+    # but /etc/ssl/cert.pem (the bundle fetch/openssl verify against) was stripped
+    # with /etc, so every https fetch failed "certificate verify failed". certctl
+    # is a target sh script we can't run on the Linux builder, so build the bundle
+    # directly — concatenating the trusted PEMs is exactly what certctl's bundle
+    # step does. (Runtime `certctl rehash` still refreshes it if certs change.)
+    if ls "$ROOTFS"/usr/share/certs/trusted/*.pem >/dev/null 2>&1; then
+        mkdir -p "$etc/ssl"
+        cat "$ROOTFS"/usr/share/certs/trusted/*.pem > "$etc/ssl/cert.pem" \
+          && log "generated /etc/ssl/cert.pem ($(ls "$ROOTFS"/usr/share/certs/trusted/*.pem | wc -l | tr -d ' ') trusted certs)" \
+          || echo "WARN: could not build /etc/ssl/cert.pem" >&2
+    else
+        echo "WARN: no /usr/share/certs/trusted — https verification will fail" >&2
+    fi
     # OSKext authentication REQUIRES kexts AND their enclosing path to be
     # root:wheel (uid/gid 0). The base/userland/kernel-modules tarballs carry
     # their build-runner uid (e.g. 1001) and `tar -x` preserves it, so the
