@@ -20,6 +20,11 @@ set -eu
 DISK="" USER_NAME="" PASSFILE="" HOSTNAME_="" UPGRADE=0
 MNT=/tmp/nbi-mnt
 SRC=/
+# Root label for the INSTALLED system — deliberately NOT "ROOTFS" (the live
+# install medium's label). A shared label makes a leftover/failed install a
+# boot-hijacker: two ufs/ROOTFS providers and the kernel mounts the wrong one.
+# The cloned fstab + a loader.conf override (step 5b) point the target here.
+LABEL=NEXTBSD
 
 while getopts "d:u:p:H:U" o; do
 	case "$o" in
@@ -52,20 +57,16 @@ if [ "$UPGRADE" = 0 ]; then
 	progress 8
 
 	# --- 2. Filesystems ---------------------------------------------------
-	status "Creating UFS root (label ROOTFS)"
-	# -L ROOTFS is the linchpin: cloned fstab + kernel-baked root both find it.
-	run newfs -U -L ROOTFS "/dev/${DISK}p3"
+	status "Creating UFS root (label $LABEL)"
+	run newfs -U -L "$LABEL" "/dev/${DISK}p3"
 	run newfs_msdos -L EFI "/dev/${DISK}p2"
 	progress 14
 fi
 
 # --- 3. Mount target --------------------------------------------------------
-# Mount by DEVICE PATH, not the ROOTFS label: when booted off a USB written with
-# the disk image, the live root is ALSO labeled ROOTFS, so /dev/ufs/ROOTFS is
-# ambiguous and resolves to the live (busy) provider — mounting the wrong disk
-# ("Device busy"). The label is still correct for the INSTALLED system's fstab
-# (once the medium is removed, only this disk carries it). ${DISK}p3 = the
-# freebsd-ufs partition created above.
+# Mount by DEVICE PATH (${DISK}p3), never by ufs label — unambiguous no matter
+# what else is attached. (This also dodged the old "Device busy" when the live
+# ROOTFS medium shadowed the target's label.)
 status "Mounting target"
 run mkdir -p "$MNT"
 run mount "/dev/${DISK}p3" "$MNT"
@@ -94,6 +95,17 @@ for d in tmp var/run var/tmp var/log; do
 	[ -d "$MNT/$d" ] && run find "$MNT/$d" -mindepth 1 -delete 2>/dev/null || true
 done
 progress 88
+
+# --- 5b. Point the cloned system at its OWN root label -----------------------
+# cpdup copied the source's fstab (ufs/ROOTFS) and loader.conf verbatim, so the
+# target still references the live medium's label. Repoint both at $LABEL so the
+# installed disk is self-contained and never collides with a ROOTFS medium. The
+# kernel's baked ROOTDEVNAME=ufs/ROOTFS is only a fallback; the loader.conf
+# vfs.root.mountfrom below takes precedence.
+status "Setting root label + boot config ($LABEL)"
+[ -f "$MNT/etc/fstab" ] && run sed -i '' -e "s#/dev/ufs/ROOTFS#/dev/ufs/$LABEL#g" "$MNT/etc/fstab"
+run sh -c "echo 'vfs.root.mountfrom=\"ufs:/dev/ufs/$LABEL\"' >> '$MNT/boot/loader.conf'"
+progress 90
 
 # --- 6. Make the disk bootable ----------------------------------------------
 status "Installing bootcode (UEFI loader + BIOS gptboot if present)"
