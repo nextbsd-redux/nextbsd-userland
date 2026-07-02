@@ -5,6 +5,11 @@
 #include <cstring>
 #include <string>
 
+#ifdef __FreeBSD__
+#include <sys/reboot.h>   // reboot(2), RB_AUTOBOOT / RB_POWEROFF
+#include <unistd.h>       // sync(2)
+#endif
+
 #include "app.hpp"
 #include "engine.hpp"
 #include "screens.hpp"
@@ -42,9 +47,17 @@ int main(int argc, char** argv) {
       case Screen::Account: cur = run_account(screen, st); break;
       case Screen::Install: cur = run_install(screen, st); break;
       case Screen::Finish:  cur = run_finish(screen, st); break;
-      case Screen::Reboot:  std::printf("[would reboot]\n"); return 0;
-      case Screen::Shutdown:std::printf("[would shut down]\n"); return 0;
-      case Screen::Shell:   std::printf("[would drop to shell]\n"); return 0;
+      case Screen::Reboot:
+#ifdef __FreeBSD__
+        if (!st.demo && !st.dry_run) { std::fflush(nullptr); sync(); reboot(RB_AUTOBOOT); }
+#endif
+        return 0;   // only reached in demo/dry-run/off-target (reboot() doesn't return)
+      case Screen::Shutdown:
+#ifdef __FreeBSD__
+        if (!st.demo && !st.dry_run) { std::fflush(nullptr); sync(); reboot(RB_POWEROFF); }
+#endif
+        return 0;
+      case Screen::Shell:   // exit cleanly back to the shell that launched us
       case Screen::Quit:
       default:              return 0;
     }
