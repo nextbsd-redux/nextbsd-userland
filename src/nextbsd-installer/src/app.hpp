@@ -33,7 +33,7 @@ struct AppState {
   bool demo = false;      // synthetic probe data, simulated install (no hardware)
   bool dry_run = false;   // engine prints actions instead of executing them
 
-  std::string build_id = "continuous · (unknown build)";
+  std::string build_id = "continuous";
   std::string media_dev;  // the booted install medium, if any
   std::string dmi_model;  // DMI product, for the hostname suggestion
 

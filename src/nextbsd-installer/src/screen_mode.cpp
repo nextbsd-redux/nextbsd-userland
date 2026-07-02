@@ -1,5 +1,5 @@
-// Phase 1 — Install Mode. Upgrade is offered only when a probe found an
-// existing NextBSD root; otherwise it's shown dimmed and does nothing.
+// Phase 1 — Install Mode. Fresh install onto a selected disk, plus a live-shell
+// escape and Reboot. (Upgrade removed.)
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -20,9 +20,6 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
 
   std::vector<std::string> entries = {
       "Install    Fresh install onto a selected disk",
-      st.existing.found
-          ? ("Upgrade    Keep data, replace base — " + st.existing.dev)
-          : "Upgrade    (no existing NextBSD install detected)",
       "Shell      Drop to a live rescue shell",
       "Reboot     Restart the machine",
   };
@@ -31,12 +28,9 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
 
   auto activate = [&] {
     switch (selected) {
-      case 0: next = Screen::Disk; screen.Exit(); break;
-      case 1:
-        if (st.existing.found) { st.mode = Mode::Upgrade; next = Screen::Disk; screen.Exit(); }
-        break;  // dimmed/disabled when no install found
-      case 2: next = Screen::Shell; screen.Exit(); break;
-      case 3: next = Screen::Reboot; screen.Exit(); break;
+      case 0: next = Screen::Disk;   screen.Exit(); break;
+      case 1: next = Screen::Shell;  screen.Exit(); break;
+      case 2: next = Screen::Reboot; screen.Exit(); break;
     }
   };
 
@@ -46,13 +40,10 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
   });
 
   auto renderer = Renderer(comp, [&] {
-    Element probe =
-        st.existing.found
-            ? (text("Probe: " + st.existing.dev + "  " + st.existing.version + "  (upgradable)") |
-               color(theme::ok))
-            : theme::hint("Probe: scanned " +
-                          (st.disks.empty() ? std::string("(no disks)") : st.disks.front().dev) +
-                          " — found no bootable NextBSD root.");
+    std::string scanned = st.disks.empty()
+                              ? std::string("no disks")
+                              : (std::to_string(st.disks.size()) + " disk(s)");
+    Element probe = theme::hint("Probe: scanned " + scanned + ".");
     auto body = vbox({
         text("Welcome to NextBSD.") | color(theme::amberBright),
         text(""),
