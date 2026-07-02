@@ -985,25 +985,24 @@ fi
 
 # SERVICE-LDCONFIG — the real service(8) must drive the on-demand ldconfig rc.d
 # job (FreeBSD-ports pkg post-installs hardcode `service ldconfig restart`).
-# Require rc=0 AND that ldconfig actually (re)wrote /var/run/ld-elf.so.hints in
-# the last second — a no-op or missing service(8) would not advance the mtime,
-# so this fails rather than passing vacuously. Exercises service(8) + /etc/rc.subr
-# (vendored overlay) + /etc/rc.d/ldconfig end to end.
+# Delete the hints file, run onestart, and require rc=0 AND that ldconfig
+# REGENERATED /var/run/ld-elf.so.hints — a no-op or missing service(8) leaves it
+# gone and FAILs. This is timing-neutral (no sleep) so it doesn't perturb the
+# later timing-sensitive gates. Exercises service(8) + /etc/rc.subr (vendored
+# overlay) + /etc/rc.d/ldconfig end to end.
 hints=/var/run/ld-elf.so.hints
-svc_before=$(stat -f %m "$hints" 2>/dev/null || echo 0)
-sleep 1
+rm -f "$hints" 2>/dev/null
 service ldconfig onestart
 svc_rc=$?
-svc_after=$(stat -f %m "$hints" 2>/dev/null || echo 0)
-if [ "$svc_rc" -eq 0 ] && [ -s "$hints" ] && [ "$svc_after" -gt "$svc_before" ]; then
-    echo "SERVICE-LDCONFIG-OK: service ldconfig onestart rc=0, hints rewritten"
+if [ "$svc_rc" -eq 0 ] && [ -s "$hints" ]; then
+    echo "SERVICE-LDCONFIG-OK: service ldconfig onestart rc=0, hints regenerated"
 else
     echo "=== SERVICE-LDCONFIG diagnostics ==="
-    echo "rc=$svc_rc before=$svc_before after=$svc_after"
+    echo "rc=$svc_rc"
     ls -la "$hints" /usr/sbin/service /usr/sbin/rcorder /etc/rc.subr /etc/rc.d/ldconfig 2>&1 || true
     echo "verbose:"; sh -x /etc/rc.d/ldconfig onestart 2>&1 | tail -25 || true
     echo "=== end diagnostics ==="
-    echo "SERVICE-LDCONFIG-FAIL: onestart rc=$svc_rc or hints not rewritten"
+    echo "SERVICE-LDCONFIG-FAIL: onestart rc=$svc_rc or hints not regenerated"
     exit 1
 fi
 
