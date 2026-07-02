@@ -983,6 +983,29 @@ else
     exit 1
 fi
 
+# SERVICE-LDCONFIG — the real service(8) must drive the on-demand ldconfig rc.d
+# job (FreeBSD-ports pkg post-installs hardcode `service ldconfig restart`).
+# Delete the hints file, run onestart, and require rc=0 AND that ldconfig
+# REGENERATED /var/run/ld-elf.so.hints — a no-op or missing service(8) leaves it
+# gone and FAILs. This is timing-neutral (no sleep) so it doesn't perturb the
+# later timing-sensitive gates. Exercises service(8) + /etc/rc.subr (vendored
+# overlay) + /etc/rc.d/ldconfig end to end.
+hints=/var/run/ld-elf.so.hints
+rm -f "$hints" 2>/dev/null
+service ldconfig onestart
+svc_rc=$?
+if [ "$svc_rc" -eq 0 ] && [ -s "$hints" ]; then
+    echo "SERVICE-LDCONFIG-OK: service ldconfig onestart rc=0, hints regenerated"
+else
+    echo "=== SERVICE-LDCONFIG diagnostics ==="
+    echo "rc=$svc_rc"
+    ls -la "$hints" /usr/sbin/service /usr/sbin/rcorder /etc/rc.subr /etc/rc.d/ldconfig 2>&1 || true
+    echo "verbose:"; sh -x /etc/rc.d/ldconfig onestart 2>&1 | tail -25 || true
+    echo "=== end diagnostics ==="
+    echo "SERVICE-LDCONFIG-FAIL: onestart rc=$svc_rc or hints not regenerated"
+    exit 1
+fi
+
 # CONFIGD-STORE — configd SCDynamicStore round-trip: open a session
 # with configd, set a key, read it back, remove it, all over the
 # config.defs Mach RPC. Proves the configd daemon + its store work
