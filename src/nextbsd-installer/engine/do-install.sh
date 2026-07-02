@@ -60,9 +60,15 @@ if [ "$UPGRADE" = 0 ]; then
 fi
 
 # --- 3. Mount target --------------------------------------------------------
+# Mount by DEVICE PATH, not the ROOTFS label: when booted off a USB written with
+# the disk image, the live root is ALSO labeled ROOTFS, so /dev/ufs/ROOTFS is
+# ambiguous and resolves to the live (busy) provider — mounting the wrong disk
+# ("Device busy"). The label is still correct for the INSTALLED system's fstab
+# (once the medium is removed, only this disk carries it). ${DISK}p3 = the
+# freebsd-ufs partition created above.
 status "Mounting target"
 run mkdir -p "$MNT"
-run mount "/dev/ufs/ROOTFS" "$MNT"
+run mount "/dev/${DISK}p3" "$MNT"
 progress 16
 
 # --- 4. Clone the running system (cpdup) ------------------------------------
