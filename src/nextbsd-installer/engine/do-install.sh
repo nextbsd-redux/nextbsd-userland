@@ -14,10 +14,15 @@
 #     SCRUB the volatile dirs — NextBSD has no rc.d cleanvar/cleartmp, so the
 #     installer must hand off a boot-clean /var and /tmp itself.
 #
-# Usage: do-install.sh -d <disk> -u <user> -p <passfile> -H <hostname> [-U]
+# Usage: do-install.sh -d <disk> [-U]
+#
+# The installer does NOT create a user or set a hostname: the installed system
+# boots with a passwordless root (from the base image) and hostnamed's
+# synthesized default name. The operator sets a root password / adds users /
+# changes the hostname after first boot.
 set -eu
 
-DISK="" USER_NAME="" PASSFILE="" HOSTNAME_="" UPGRADE=0
+DISK="" UPGRADE=0
 MNT=/tmp/nbi-mnt
 SRC=/
 # Root label for the INSTALLED system — deliberately NOT "ROOTFS" (the live
@@ -26,18 +31,14 @@ SRC=/
 # The cloned fstab + a loader.conf override (step 5b) point the target here.
 LABEL=NEXTBSD
 
-while getopts "d:u:p:H:U" o; do
+while getopts "d:U" o; do
 	case "$o" in
 		d) DISK=$OPTARG ;;
-		u) USER_NAME=$OPTARG ;;
-		p) PASSFILE=$OPTARG ;;
-		H) HOSTNAME_=$OPTARG ;;
 		U) UPGRADE=1 ;;
-		*) echo "usage: do-install.sh -d disk -u user -p passfile -H hostname [-U]" >&2; exit 2 ;;
+		*) echo "usage: do-install.sh -d disk [-U]" >&2; exit 2 ;;
 	esac
 done
-[ -n "$DISK" ] && [ -n "$USER_NAME" ] && [ -n "$HOSTNAME_" ] || {
-	echo "do-install.sh: missing required args" >&2; exit 2; }
+[ -n "$DISK" ] || { echo "do-install.sh: missing -d <disk>" >&2; exit 2; }
 
 progress() { printf 'PROGRESS\t%s\n' "$1"; }
 status()   { printf 'STATUS\t%s\n'   "$1"; }
@@ -139,19 +140,11 @@ fi
 run umount "$EFIMNT"
 progress 94
 
-# --- 7. Account + hostname --------------------------------------------------
-status "Creating admin account + hostname"
-# Primary admin in wheel; root left locked.
-run pw -R "$MNT" useradd -n "$USER_NAME" -m -G wheel -s /bin/sh
-if [ -n "$PASSFILE" ] && [ -f "$PASSFILE" ]; then
-	if [ "${NEXTBSD_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: set password for $USER_NAME"
-	else pw -R "$MNT" usermod "$USER_NAME" -h 0 < "$PASSFILE"; fi
-fi
-# Hostname: NextBSD is launchd-native (no rc.conf). hostnamed owns the live
-# value; persistence is via its SCPreferences store, NOT /etc/rc.conf.
-# TODO(engine): write the hostname through the hostnamed/SCPreferences plist
-# the userland overlay uses; placeholder writes /etc/myname for now.
-run sh -c "echo '$HOSTNAME_' > '$MNT/etc/myname'"
+# --- 7. Account + hostname: intentionally none ------------------------------
+# No user is created and no hostname is written. The cloned base ships a
+# passwordless root, and hostnamed synthesizes a default hostname at runtime,
+# so the system is usable on first boot. The operator sets a root password,
+# adds users, and changes the hostname after install.
 progress 98
 
 # --- 8. Done ----------------------------------------------------------------

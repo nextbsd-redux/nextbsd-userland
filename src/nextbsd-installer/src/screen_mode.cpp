@@ -21,7 +21,6 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
   std::vector<std::string> entries = {
       "Install    Fresh install onto a selected disk",
       "Shell      Drop to a live rescue shell",
-      "Reboot     Restart the machine",
   };
   int selected = 0;
   auto menu = Menu(&entries, &selected);
@@ -30,7 +29,6 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
     switch (selected) {
       case 0: next = Screen::Disk;   screen.Exit(); break;
       case 1: next = Screen::Shell;  screen.Exit(); break;
-      case 2: next = Screen::Reboot; screen.Exit(); break;
     }
   };
 

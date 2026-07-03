@@ -11,11 +11,7 @@
 
 namespace nbi::engine {
 
-// Hostname helpers (the design's slug + suggestion logic).
-std::string slugify(const std::string& in);
-std::string suggest_hostname(const std::string& user, const std::string& model);
-
-// Fill st.disks / st.existing / st.dmi_model / st.media_dev / st.build_id.
+// Fill st.disks / st.existing / st.build_id.
 void probe(AppState& st);
 
 // Run the install, reporting progress(percent 0..100, status line).

@@ -7,7 +7,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/reboot.h>   // reboot(2), RB_AUTOBOOT / RB_POWEROFF
-#include <unistd.h>       // sync(2)
+#include <unistd.h>       // sync(2), execl(2)
 #endif
 
 #include "app.hpp"
@@ -44,7 +44,6 @@ int main(int argc, char** argv) {
     switch (cur) {
       case Screen::Mode:    cur = run_mode(screen, st); break;
       case Screen::Disk:    cur = run_disk(screen, st); break;
-      case Screen::Account: cur = run_account(screen, st); break;
       case Screen::Install: cur = run_install(screen, st); break;
       case Screen::Finish:  cur = run_finish(screen, st); break;
       case Screen::Reboot:
@@ -57,7 +56,18 @@ int main(int argc, char** argv) {
         if (!st.demo && !st.dry_run) { std::fflush(nullptr); sync(); reboot(RB_POWEROFF); }
 #endif
         return 0;
-      case Screen::Shell:   // exit cleanly back to the shell that launched us
+      case Screen::Shell:
+#ifdef __FreeBSD__
+        // Drop to a real interactive shell, replacing the installer image.
+        // FTXUI restored the terminal when the Loop exited, so /bin/sh gets a
+        // usable console. If exec fails, fall through to a clean exit (which
+        // returns to whatever launched the installer).
+        if (!st.demo && !st.dry_run) {
+          std::fflush(nullptr);
+          execl("/bin/sh", "sh", "-i", static_cast<char*>(nullptr));
+        }
+#endif
+        return 0;
       case Screen::Quit:
       default:              return 0;
     }
