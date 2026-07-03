@@ -54,13 +54,14 @@ toolchain file (`cmake/cross-<arch>.cmake`). `migcom` builds for the runner as a
 host tool. Driver order and the full design are in the
 [repo-split plan](https://pkgdemon.github.io/nextbsd-userland-repo-plan.html).
 
-## System path layout — the gershwin four-domain model
+## System path layout — the four-domain model
 
-NextBSD follows **gershwin's four-domain filesystem layout** (the named
-[`gershwin` tools-make FilesystemLayout](https://pkgdemon.github.io/nextbsd-path-domain-conformance-plan.html)),
+NextBSD uses an explicit
+[**four-domain filesystem layout**](https://pkgdemon.github.io/nextbsd-path-domain-conformance-plan.html) —
 **not** Apple's convention where the bare `/Library` *is* the Local domain. Every
-system resource lives under an explicit domain root, so `/System` can belong
-entirely to the desktop (Gershwin) while the OS uses the Local domain:
+system resource lives under an explicit domain root rather than a bare `/Library`,
+keeping `/System` reserved for the System domain and the OS's admin-installed
+resources in the Local domain:
 
 | Domain  | Root            | Owner / meaning                    |
 |---------|-----------------|------------------------------------|
