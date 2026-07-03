@@ -5,7 +5,7 @@
  *         hostnameprefset --clear
  *
  * Writes ComputerName=<computer-name> into the default SCPreferences
- * file (/Library/Preferences/SystemConfiguration/preferences.plist)
+ * file (/Local/Library/Preferences/SystemConfiguration/preferences.plist)
  * at path /System/System, commits, and exits. The next hostnamed
  * refresh reads that value via SCPrefs and adopts it — proving the
  * SCPrefs tier fires.
@@ -109,7 +109,7 @@ main(int argc, char **argv)
 		goto out;
 	}
 	(void)printf("hostnameprefset: wrote ComputerName='%s' to "
-	    "/Library/Preferences/SystemConfiguration/preferences.plist\n",
+	    "/Local/Library/Preferences/SystemConfiguration/preferences.plist\n",
 	    argv[1]);
 	rc = 0;
 out:

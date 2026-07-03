@@ -5,7 +5,7 @@
  * scheduled on a shared libdispatch serial queue:
  *
  *   prefs_monitor (src/hostnamed/prefs_monitor.c, clean-room ~100 LOC)
- *     Bridges /Library/Preferences/SystemConfiguration/preferences.plist
+ *     Bridges /Local/Library/Preferences/SystemConfiguration/preferences.plist
  *     to the SCDynamicStore Setup: keys that the decision engine reads.
  *     PreferencesMonitor-equivalent: the configd plugin we don't have.
  *

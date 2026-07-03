@@ -238,7 +238,7 @@ static Boolean __CFWriteBytesToFileWithAtomicity(CFURLRef url, const void *bytes
             group = statBuf.st_gid;
         } else {
             mode = 0664;
-            if (writingFileAsRoot && (0 == strncmp(cpath, "/Library/Preferences", 20))) {
+            if (writingFileAsRoot && (0 == strncmp(cpath, "/Local/Library/Preferences", 26))) {
                 owner = geteuid();
                 group = 80;
             }

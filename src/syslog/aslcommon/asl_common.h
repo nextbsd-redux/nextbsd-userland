@@ -29,7 +29,7 @@
 #include <asl_msg.h>
 
 #define ASL_MODULE_NAME "com.apple.asl"
-#define _PATH_CRASHREPORTER "/Library/Logs/CrashReporter"
+#define _PATH_CRASHREPORTER "/Local/Library/Logs/CrashReporter"
 #define _PATH_CRASHREPORTER_MOBILE_1 "/var/mobile/Library/Logs/CrashReporter"
 #define _PATH_CRASHREPORTER_MOBILE_2 "/private/var/mobile/Library/Logs/CrashReporter"
 #define ASL_INTERNAL_LOGS_DIR "Logs"

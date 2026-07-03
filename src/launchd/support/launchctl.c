@@ -2568,7 +2568,7 @@ bootstrap_cmd(int argc, char *const argv[])
 		} else if (strcasecmp(session, VPROCMGR_SESSION_BACKGROUND) == 0
 				   || strcasecmp(session, VPROCMGR_SESSION_LOGINWINDOW) == 0) {
 			/* If we're bootstrapping either the LoginWindow or Background
-			 * sessions, then we only load items from /System and /Library. We
+			 * sessions, then we only load items from /System and /Local/Library. We
 			 * do not attempt to load anything from a user's home directory, as
 			 * it might not be available at this time.
 			 */
@@ -4119,7 +4119,7 @@ fix_bogus_file_metadata(void)
 		{ _PATH_VARDB, 0, 0, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH, S_IWGRP | S_IWOTH | S_ISUID | S_ISGID, true },
 		{ _PATH_VARDB "mds/", 0, 0, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH, S_IWGRP | S_IWOTH | S_ISUID | S_ISGID, true },
 		// Similar fix for <rdar://problem/6550172>.
-		{ "/Library/StartupItems", 0, 0, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH, S_IWGRP | S_IWOTH | S_ISUID | S_ISGID, true },
+		{ "/Local/Library/StartupItems", 0, 0, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH, S_IWGRP | S_IWOTH | S_ISUID | S_ISGID, true },
 	};
 	struct stat sb;
 	size_t i;

@@ -53,3 +53,39 @@ with the toolchain clang (zero source changes). The two CMake holdouts
 toolchain file (`cmake/cross-<arch>.cmake`). `migcom` builds for the runner as a
 host tool. Driver order and the full design are in the
 [repo-split plan](https://pkgdemon.github.io/nextbsd-userland-repo-plan.html).
+
+## System path layout — the four-domain model
+
+NextBSD uses an explicit
+[**four-domain filesystem layout**](https://pkgdemon.github.io/nextbsd-path-domain-conformance-plan.html) —
+**not** Apple's convention where the bare `/Library` *is* the Local domain. Every
+system resource lives under an explicit domain root rather than a bare `/Library`,
+keeping `/System` reserved for the System domain and the OS's admin-installed
+resources in the Local domain:
+
+| Domain  | Root            | Owner / meaning                    |
+|---------|-----------------|------------------------------------|
+| System  | `/System/Library` | OS-provided, immutable            |
+| Local   | `/Local/Library`  | this machine, admin-installed     |
+| Network | `/Network/Library`| network-shared (reserved)         |
+| User    | `~/Library`       | per-user                          |
+
+Consequently the Darwin-source components in this repo use `/Local/Library` for
+everything Apple would have put in the bare `/Library` (Local) domain. The
+canonical locations these components read/write:
+
+| Path | Component | Purpose |
+|------|-----------|---------|
+| `/System/Library/LaunchDaemons` | launchd (PID 1) | OS daemon plists (scanned first) |
+| `/Local/Library/LaunchDaemons`  | launchd (PID 1) | third-party daemon plists (scanned second) |
+| `/Local/Library/StartupItems`   | launchctl | legacy StartupItems bootstrap dir |
+| `/Local/Library/Preferences/SystemConfiguration` | `libSystemConfiguration` (`PREFS_DEFAULT_DIR`) | SCPreferences store — `preferences.plist` (`ComputerName`, network config), `com.apple.Boot.plist` |
+| `/Local/Library/Preferences`    | `libCoreFoundation` | CFPreferences "any user" / computer domain |
+| `~/Library/Preferences`         | `libCoreFoundation` | CFPreferences current-user (User domain — **not** `/Local`) |
+| `/System/Library/Extensions`    | `kext_tools` | OS kext bundles |
+| `/Local/Library/Extensions`     | `kext_tools` | auxiliary (admin-installed) kext bundles |
+| `/Local/Library/Logs`, `/Local/Library/Logs/CrashReporter` | syslog/ASL | log + crash-report directories |
+
+Rule of thumb for new code: a shared/computer-wide resource goes under
+`/Local/Library`; an OS-shipped one under `/System/Library`; a per-user one under
+`~/Library`. Never introduce a bare `/Library/...` path.

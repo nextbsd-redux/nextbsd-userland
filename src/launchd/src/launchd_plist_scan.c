@@ -4,7 +4,7 @@
  * In-launchd LaunchDaemons plist scanner. Replaces the earlier
  * fork+exec(launchctl bootstrap) bootstrap hack with the Apple-
  * faithful pattern: launchd itself reads /System/Library/LaunchDaemons/
- * + /Library/LaunchDaemons/ at PID-1 startup, parses each .plist via
+ * + /Local/Library/LaunchDaemons/ at PID-1 startup, parses each .plist via
  * libCoreFoundation, converts the CF tree to launch_data_t, and calls
  * job_import() directly (the same entry launchctl-driven loads use,
  * over Mach IPC).
@@ -219,7 +219,7 @@ launchd_load_one_plist(const char *path)
 
 /*
  * Scan one LaunchDaemons directory, load every .plist found inside.
- * Missing dir is silently ok; we walk both /System and /Library and
+ * Missing dir is silently ok; we walk both /System and /Local/Library and
  * either may be absent in a minimal build.
  */
 static void
@@ -257,10 +257,10 @@ launchd_scan_launchdaemons(void)
 {
 	/*
 	 * Apple-canonical search paths, in priority order. /System owns
-	 * the OS-provided daemons; /Library is the third-party slot.
+	 * the OS-provided daemons; /Local/Library is the third-party slot.
 	 * Per-user LaunchAgents (~/Library/LaunchAgents) are a per-user
 	 * launchd concern, not PID-1.
 	 */
 	launchd_scan_one_dir("/System/Library/LaunchDaemons");
-	launchd_scan_one_dir("/Library/LaunchDaemons");
+	launchd_scan_one_dir("/Local/Library/LaunchDaemons");
 }

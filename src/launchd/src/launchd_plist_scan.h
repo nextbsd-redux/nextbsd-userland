@@ -8,7 +8,7 @@
 #define _LAUNCHD_PLIST_SCAN_H_
 
 /*
- * Walk /System/Library/LaunchDaemons + /Library/LaunchDaemons and
+ * Walk /System/Library/LaunchDaemons + /Local/Library/LaunchDaemons and
  * call job_import() on every .plist found. Logs summary to syslog +
  * console. Idempotent w.r.t. already-loaded jobs (job_import handles
  * duplicates). Called from launchd.c's PID-1 boot path.

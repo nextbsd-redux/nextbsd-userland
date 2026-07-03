@@ -66,11 +66,11 @@
 /* The system extensions folder */
 #define kSystemExtensionsDir  "/System/Library/Extensions"
 /* The library extensions folder */
-#define kLibraryExtensionsDir  "/Library/Extensions"
+#define kLibraryExtensionsDir  "/Local/Library/Extensions"
 
 
 /* The booter configuration file */
-#define kBootConfig           "/Library/Preferences/SystemConfiguration/com.apple.Boot.plist"
+#define kBootConfig           "/Local/Library/Preferences/SystemConfiguration/com.apple.Boot.plist"
 #define kKernelFlagsKey       "Kernel Flags"
 #define kMKextCacheKey        "MKext Cache"
 #define kKernelNameKey        "Kernel"
