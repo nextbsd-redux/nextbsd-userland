@@ -93,7 +93,7 @@ const struct _xpc_dictionary_s _xpc_error_termination_imminent;
  * Passed to xpc_connection_create_mach_service(). This flag indicates that the
  * job advertising the service name in its launchd.plist(5) should be in the
  * privileged Mach bootstrap. This is typically accomplished by placing your
- * launchd.plist(5) in /Library/LaunchDaemons. If specified alongside the
+ * launchd.plist(5) in /Local/Library/LaunchDaemons. If specified alongside the
  * XPC_CONNECTION_MACH_SERVICE_LISTENER flag, this flag is a no-op.
  */
 #define XPC_CONNECTION_MACH_SERVICE_PRIVILEGED (1 << 1)

@@ -59,7 +59,7 @@ make_key(CFAllocatorRef allocator, CFStringRef format, ...)
  * SCDynamicStoreKeyCreateComputerName — "Setup:/System".
  * The Setup:/System dict carries ComputerName + ComputerNameEncoding,
  * the user-visible "My Mac"-style name. PreferencesMonitor (or our
- * prefs_monitor equivalent) writes this from /Library/Preferences/
+ * prefs_monitor equivalent) writes this from /Local/Library/Preferences/
  * SystemConfiguration/preferences.plist on commit.
  */
 CFStringRef

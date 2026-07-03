@@ -1242,7 +1242,7 @@ CF_EXPORT CFTypeRef _Nullable _CFBundleCopyFindResources(CFBundleRef _Nullable b
             bundlePath = CFURLCopyFileSystemPath(absoluteURL, PLATFORM_PATH_STYLE);
             CFRelease(absoluteURL);
         }
-        if ((_CFBundleVersionOldStyleResources == bundleVersion) || CFEqual(CFSTR("/Library/Spotlight"), bundlePath)){
+        if ((_CFBundleVersionOldStyleResources == bundleVersion) || CFEqual(CFSTR("/Local/Library/Spotlight"), bundlePath)){
             if (returnValue) CFRelease(returnValue);
             if ((bundleVersion == _CFBundleVersionOldStyleResources && realSubdirectory && CFEqual(realSubdirectory, CFSTR("Resources"))) || (bundleVersion == _CFBundleVersionContentsResources && realSubdirectory && CFEqual(realSubdirectory, CFSTR("Contents/Resources")))) {
                 if (realSubdirectory) CFRelease(realSubdirectory);

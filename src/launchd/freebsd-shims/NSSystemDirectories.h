@@ -3,13 +3,13 @@
  *
  * Stub NSSystemDirectories for launchctl. Apple's launchctl uses
  * NSStartSearchPathEnumeration / NSGetNextSearchPathEnumeration to
- * walk the Library directory hierarchy (~/Library, /Library,
+ * walk the Library directory hierarchy (~/Library, /Local/Library,
  * /Network/Library, /System/Library) looking for LaunchAgents and
  * LaunchDaemons subdirs.
  *
  * Stub returns ONLY /Local/Library and /System/Library (per the
  * project install-layout spike: /Local/Library replaces Apple's
- * /Library on this platform). Skips ~/Library (no per-user agent
+ * /Local/Library on this platform). Skips ~/Library (no per-user agent
  * support yet) and /Network/Library (no NetInfo / OD).
  *
  * The enumeration state is just an int counter:

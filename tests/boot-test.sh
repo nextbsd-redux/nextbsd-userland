@@ -1142,7 +1142,7 @@ expect {
 
 # HOSTNAMED-PREFS — issue #86 iter 2 gate. ROUND 2 in run.sh:
 # hostnameprefset writes ComputerName="hostnamed-iter2-fixture" into
-# /Library/Preferences/SystemConfiguration/preferences.plist via the
+# /Local/Library/Preferences/SystemConfiguration/preferences.plist via the
 # SCPreferences API; hostnamed re-reads and uses the prefs value
 # instead of synthesizing; hostnametest with the fixture arg verifies
 # that all three publish surfaces (Setup:/System + Setup:/Network/HostNames

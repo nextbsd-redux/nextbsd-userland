@@ -90,7 +90,7 @@ SCPreferencesGetTypeID		(void);
 	@param allocator the CFAllocator to use, or NULL.
 	@param name      a label identifying the calling process.
 	@param prefsID   the preferences file: NULL for the default
-		(/Library/Preferences/SystemConfiguration/preferences.plist),
+		(/Local/Library/Preferences/SystemConfiguration/preferences.plist),
 		a name resolved within that directory, or a path containing
 		a '/' used as-is.
 	@result a new session handle (the file is read lazily on first

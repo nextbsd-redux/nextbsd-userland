@@ -29,13 +29,13 @@ CFURLRef _Nullable _CFKnownLocationCreatePreferencesURLForUser(CFKnownLocationUs
  Building for a Darwin OS. (We use these paths on Swift builds as well, so that we can interoperate a little with Darwin's defaults(1) command and the other system facilities; but you want to use the system version of CF if possible on those platforms, which will talk to cfprefsd(8) and has stronger interprocess consistency guarantees.)
  
  User:
- - Any: /Library/Preferences
+ - Any: /Local/Library/Preferences
  - Current: $HOME/Library/Preferences
  */
     
     switch (user) {
         case _kCFKnownLocationUserAny:
-            location = CFURLCreateWithFileSystemPath(kCFAllocatorSystemDefault, CFSTR("/Library/Preferences"), kCFURLPOSIXPathStyle, true);
+            location = CFURLCreateWithFileSystemPath(kCFAllocatorSystemDefault, CFSTR("/Local/Library/Preferences"), kCFURLPOSIXPathStyle, true);
             break;
             
         case _kCFKnownLocationUserCurrent:
@@ -43,6 +43,8 @@ CFURLRef _Nullable _CFKnownLocationCreatePreferencesURLForUser(CFKnownLocationUs
             // passthrough to:
         case _kCFKnownLocationUserByName: {
             CFURLRef home = CFCopyHomeDirectoryURLForUser(username);
+            // User domain stays ~/Library (gershwin User domain), NOT ~/Local/Library — only the
+            // shared/computer (UserAny) case above maps to the Local domain /Local/Library.
             location = CFURLCreateWithFileSystemPathRelativeToBase(kCFAllocatorSystemDefault, CFSTR("/Library/Preferences"), kCFURLPOSIXPathStyle, true, home);
             CFRelease(home);
             

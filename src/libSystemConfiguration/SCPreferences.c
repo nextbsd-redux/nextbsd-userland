@@ -32,7 +32,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define	PREFS_DEFAULT_DIR	"/Library/Preferences/SystemConfiguration"
+#define	PREFS_DEFAULT_DIR	"/Local/Library/Preferences/SystemConfiguration"
 #define	PREFS_DEFAULT_CONFIG	"preferences.plist"
 
 /* refuse to load a "preferences file" larger than this — treat as corrupt */

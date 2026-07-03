@@ -50,8 +50,8 @@
 #define PATH_VAR_LOG "/var/log/"
 #define PATH_VAR_LOG_LEN 9
 
-#define PATH_LIBRARY_LOGS "/Library/Logs/"
-#define PATH_LIBRARY_LOGS_LEN 14
+#define PATH_LIBRARY_LOGS "/Local/Library/Logs/"
+#define PATH_LIBRARY_LOGS_LEN 20
 
 #if !TARGET_OS_SIMULATOR
 #define _PATH_ASL_CONF_LOCAL_DIR "/usr/local/etc/asl"
@@ -465,7 +465,7 @@ asl_out_dest_for_path(asl_out_module_t *m, const char *path)
  * Create a directory path.
  *
  * mlist provides owner, group, and access mode, which are required for "non-standard"
- * directories.  Directories for standard paths (/var/log or /Library/Logs) default
+ * directories.  Directories for standard paths (/var/log or /Local/Library/Logs) default
  * to root/admin/0755 if there is no mlist rule for them.
  */
 static int

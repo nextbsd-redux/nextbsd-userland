@@ -3,7 +3,7 @@
  *
  * Real-macOS analog: PreferencesMonitor is the configd plugin that
  * watches the system network-preferences file
- * (/Library/Preferences/SystemConfiguration/preferences.plist) and,
+ * (/Local/Library/Preferences/SystemConfiguration/preferences.plist) and,
  * on every committed change, republishes the relevant subset into
  * SCDynamicStore — including Setup:/System/ComputerName and
  * Setup:/Network/HostNames. Apple's set-hostname.c (vendored under
