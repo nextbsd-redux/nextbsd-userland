@@ -36,10 +36,10 @@ Screen run_finish(ScreenInteractive& screen, AppState& st) {
         text(""),
         row("Build", st.build_id),
         row("Disk", disk),
-        row("Hostname", st.hostname),
-        row("Admin user", st.username + "  (wheel, sudo)"),
         text(""),
         theme::hint("Remove the install medium before rebooting."),
+        theme::hint("Log in as root (no password), then set a password, add"),
+        theme::hint("users, or change the hostname."),
         filler(),
         hbox({reboot->Render(), text("  "), shut->Render(), text("  "), sh->Render()}),
     });

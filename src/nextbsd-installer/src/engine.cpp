@@ -55,44 +55,9 @@ const char* kBasePath = "PATH=/sbin:/usr/sbin:/bin:/usr/bin ";
 
 } // namespace
 
-std::string slugify(const std::string& in) {
-  std::string s;
-  for (unsigned char c : in) {
-    char l = static_cast<char>(std::tolower(c));
-    if ((l >= 'a' && l <= 'z') || (l >= '0' && l <= '9'))
-      s += l;
-    else if (l == ' ' || l == '-' || l == '_')
-      s += '-';
-  }
-  // collapse runs of '-'
-  std::string o;
-  bool prev_dash = false;
-  for (char c : s) {
-    if (c == '-') {
-      if (!prev_dash) o += c;
-      prev_dash = true;
-    } else {
-      o += c;
-      prev_dash = false;
-    }
-  }
-  while (!o.empty() && o.front() == '-') o.erase(o.begin());
-  while (!o.empty() && o.back() == '-') o.pop_back();
-  if (o.size() > 63) o.resize(63);  // RFC-1123 label cap
-  return o;
-}
-
-std::string suggest_hostname(const std::string& user, const std::string& model) {
-  std::string u = slugify(user.empty() ? "nextbsd" : user);
-  std::string m = slugify(model);
-  return m.empty() ? (u + "-nextbsd") : (u + "-" + m);
-}
-
 void probe(AppState& st) {
   if (st.demo) {
     st.build_id = "continuous · 2026-06-08 00:19 UTC · 0d5f191";
-    st.dmi_model = "ThinkPad T460";
-    st.media_dev = "da0";
     st.disks = {
         {"ada0", "238 GB", "Samsung SSD 860 EVO", false,
          {{"\"BACKUP\"", "212 GB", "ufs", ""},
@@ -142,11 +107,10 @@ void probe(AppState& st) {
       for (auto& d : st.disks)
         if (d.dev == fld[1]) { tgt = &d; break; }
       tgt->volumes.push_back(std::move(v));
-    } else if (fld[0] == "MEDIA" && fld.size() >= 2) {
-      st.media_dev = fld[1];
-    } else if (fld[0] == "DMI" && fld.size() >= 2) {
-      st.dmi_model = fld[1];
     }
+    // MEDIA/DMI records from probe-disks.sh are ignored: the booted medium is
+    // flagged per-disk via is_media, and the installer no longer suggests a
+    // hostname, so neither is needed here.
   }
 }
 
@@ -159,7 +123,7 @@ bool run_install(AppState& st,
         {15,  "Creating UFS filesystem (label ROOTFS)…"},
         {88,  "Cloning base with cpdup…"},
         {95,  "Installing bootcode + populating ESP…"},
-        {100, "Configuring account, hostname, host keys…"},
+        {100, "Finalizing…"},
     }};
     int cur = 0;
     for (const auto& s : steps) {
@@ -182,35 +146,18 @@ bool run_install(AppState& st,
     return false;
   }
 
-  // Password -> a 0600 temp file (do-install.sh: `pw usermod -h 0 < passfile`).
-  // Kept off the command line so it never appears in argv / ps output.
-  std::string passfile;
-  if (!st.password.empty()) {
-    char tmpl[] = "/tmp/nbi-pass.XXXXXX";
-    int fd = mkstemp(tmpl);
-    if (fd >= 0) {
-      fchmod(fd, S_IRUSR | S_IWUSR);
-      std::string pw = st.password + "\n";
-      ssize_t w = ::write(fd, pw.data(), pw.size());
-      (void)w;
-      ::close(fd);
-      passfile = tmpl;
-    }
-  }
-
+  // The installer no longer creates a user or sets a hostname — the installed
+  // system boots with a passwordless root (from the base) and hostnamed's
+  // synthesized default; the operator sets a root password / adds users /
+  // changes the hostname after first boot. So the engine only needs the disk.
   std::string cmd = std::string(kBasePath);
   if (st.dry_run) cmd += "NEXTBSD_DRYRUN=1 ";
   cmd += shq(libexec_dir() + "/do-install.sh");
   cmd += " -d " + shq(st.disks[st.disk_index].dev);
-  cmd += " -u " + shq(st.username);
-  cmd += " -H " + shq(st.hostname);
-  if (!passfile.empty()) cmd += " -p " + shq(passfile);
-  if (st.mode == Mode::Upgrade) cmd += " -U";
   cmd += " 2>&1";
 
   FILE* f = popen(cmd.c_str(), "r");
   if (!f) {
-    if (!passfile.empty()) ::unlink(passfile.c_str());
     st.fail_stage = "failed to launch install engine";
     return false;
   }
@@ -237,7 +184,6 @@ bool run_install(AppState& st,
     }
   }
   int rc = pclose(f);
-  if (!passfile.empty()) ::unlink(passfile.c_str());
 
   int code = (rc == -1 || !WIFEXITED(rc)) ? -1 : WEXITSTATUS(rc);
   if (code == 0) {

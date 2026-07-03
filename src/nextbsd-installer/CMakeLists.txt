@@ -29,7 +29,6 @@ add_executable(nextbsd-installer
   src/engine.cpp
   src/screen_mode.cpp
   src/screen_disk.cpp
-  src/screen_account.cpp
   src/screen_install.cpp
   src/screen_finish.cpp
 )
