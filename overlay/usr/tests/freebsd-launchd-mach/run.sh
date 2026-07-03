@@ -513,7 +513,7 @@ for fbin in /bin/cat /usr/bin/head /usr/bin/tail \
             /usr/bin/fmt /usr/bin/fold /usr/bin/nl \
             /usr/bin/paste /usr/bin/rev /usr/bin/ul \
             /usr/bin/unexpand /usr/bin/uniq /usr/bin/lam \
-            /usr/bin/look /usr/games/banner \
+            /usr/bin/look \
             /bin/ed /usr/bin/pr /usr/bin/rs /usr/bin/split \
             /usr/bin/vis /usr/bin/unvis /usr/bin/join \
             /usr/bin/column /sbin/md5 /sbin/sha256 \
