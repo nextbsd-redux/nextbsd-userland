@@ -105,7 +105,10 @@ jobs:
           # rc.d, ssh), boot/loader.conf.d, and usr/tests drivers. Consumers no
           # longer apply a separate overlay — they only do the Apple /private
           # symlink layout + pwd_mkdb/cap_mkdb finalization at assembly time.
-          cp -aR "${{ github.workspace }}/overlay/." /stage/
+          # Relative path (CWD is the checkout root, as ./build-userland.sh
+          # above relies on) — ${{ github.workspace }} is the host path and does
+          # not exist inside the build container (workspace is mounted at /__w).
+          cp -aR overlay/. /stage/
           # master.passwd must be 0600 (git can't store sub-0644 modes); the
           # /etc symlink is created by the consumer's apple_private_layout.
           [ -f /stage/private/etc/master.passwd ] && chmod 0600 /stage/private/etc/master.passwd
