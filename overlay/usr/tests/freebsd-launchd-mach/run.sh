@@ -406,12 +406,8 @@ for fbin in /bin/chflags /bin/mkdir /bin/mkfifo /bin/rmdir \
         FILECMD_FAIL=1
     fi
 done
-# shar is a shell script, not -x by default; check separately.
-if [ ! -r /usr/bin/shar ]; then
-    echo "FILECMD-LEAF-FAIL: /usr/bin/shar missing"
-    ls -la /usr/bin/shar 2>&1 || true
-    FILECMD_FAIL=1
-fi
+# shar was removed from the FreeBSD 15 base (ObsoleteFiles.inc) and the pkg
+# design takes command suites from the base, so it's no longer expected.
 # Identity probe: Apple's chflags binary should contain the Apple
 # copyright string. FreeBSD's chflags has different copyright text
 # (no "Apple"). Differentiates "is the overlay actually overlaying"
@@ -456,7 +452,7 @@ for fbin in /usr/bin/true /usr/bin/false /bin/echo /bin/sleep \
             /usr/bin/what /usr/bin/yes \
             /usr/sbin/chroot /bin/date /usr/bin/hexdump \
             /usr/bin/od /usr/bin/lockf /usr/bin/script \
-            /usr/bin/shlock /usr/bin/stdbuf /bin/test /bin/[ \
+            /usr/bin/stdbuf /bin/test /bin/[ \
             /usr/bin/whereis /usr/bin/which /usr/bin/xargs \
             /usr/bin/find /usr/bin/who \
             /usr/bin/locate /usr/libexec/locate.bigram \
@@ -649,9 +645,9 @@ fi
 #
 # Plan: https://pkgdemon.github.io/freebsd-apple-userland-cmds-plan.html#system_cmds
 SYSCMD_FAIL=0
-for fbin in /usr/sbin/mkfile /bin/sync /bin/wait4path \
+for fbin in /bin/sync \
             /usr/bin/pagesize \
-            /usr/bin/newgrp /usr/sbin/vifs /usr/sbin/vipw \
+            /usr/bin/newgrp /usr/sbin/vipw \
             /usr/sbin/accton \
             /usr/bin/getconf \
             /usr/libexec/getty \
@@ -673,16 +669,7 @@ if [ $SYSCMD_FAIL -eq 0 ]; then
         SYSCMD_FAIL=1
     fi
 fi
-if [ $SYSCMD_FAIL -eq 0 ]; then
-    rm -f /tmp/syscmd-mkfile-probe
-    if /usr/sbin/mkfile 4k /tmp/syscmd-mkfile-probe >/dev/null 2>&1 && \
-       [ -f /tmp/syscmd-mkfile-probe ]; then
-        rm -f /tmp/syscmd-mkfile-probe
-    else
-        echo "SYSCMD-LEAF-FAIL: mkfile didn't create the probe file"
-        SYSCMD_FAIL=1
-    fi
-fi
+# mkfile was a Solaris-ism never shipped in FreeBSD base; not a LEAF tool.
 # Iter-2 probes — just verify each binary execs and emits its usage
 # (or other expected exit). These are interactive editors / requires
 # arg / are sensitive operations; we only smoke-test the rtld + main()
@@ -695,16 +682,11 @@ if [ $SYSCMD_FAIL -eq 0 ]; then
     # any rc is fine — we want no crash / no SIGSEGV.
     : "ok"
 fi
+# vifs (edit /etc/fstab under lock) was removed from the FreeBSD base; vipw
+# covers the equivalent LEAF smoke-test below.
 if [ $SYSCMD_FAIL -eq 0 ]; then
-    # vifs/vipw/accton don't have a clean "--help" mode. Just verify
-    # exec works (any rc except 127 / 128+sig is ok).
-    /usr/sbin/vifs </dev/null >/dev/null 2>&1; rc=$?
-    if [ $rc -ge 128 ]; then
-        echo "SYSCMD-LEAF-FAIL: vifs crashed (rc=$rc)"
-        SYSCMD_FAIL=1
-    fi
-fi
-if [ $SYSCMD_FAIL -eq 0 ]; then
+    # vipw/accton don't have a clean "--help" mode. Just verify exec works
+    # (any rc except 127 / 128+sig is ok).
     /usr/sbin/vipw </dev/null >/dev/null 2>&1; rc=$?
     if [ $rc -ge 128 ]; then
         echo "SYSCMD-LEAF-FAIL: vipw crashed (rc=$rc)"
