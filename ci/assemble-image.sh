@@ -94,10 +94,11 @@ stage_rootfs() {
     install -m555 "$kbin" "$ROOTFS/boot/kernel/kernel"
     # driver kexts -> /System/Library/Extensions
     for m in ${MODULES_TGZ:-}; do [ -f "$m" ] && tar -C "$ROOTFS/System/Library/Extensions" -xzf "$m"; done
-    # Darwin userland (raw tar rooted at /)
+    # Darwin userland (raw tar rooted at /) — now INCLUDES the authoritative
+    # overlay (LaunchDaemons, /private/etc, boot/loader.conf.d, usr/tests), so it
+    # is a complete userland; no separate overlay application is needed. Its
+    # /private/etc resolves via the /etc symlink set up by apple_private_layout.
     tar -C "$ROOTFS" -xzf "$USERLAND_TGZ"
-    # overlay last (its /private/etc config now resolves via the /etc symlink)
-    [ -n "${OVERLAY:-}" ] && [ -d "$OVERLAY" ] && cp -aR "$OVERLAY/." "$ROOTFS/"
     apple_private_runtime
 }
 

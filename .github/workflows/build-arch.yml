@@ -98,6 +98,17 @@ jobs:
       - name: Pack userland artifact
         run: |
           rm -f /stage/METALOG
+          # Bundle the authoritative overlay INTO the artifact so the published
+          # tarball — and thus the NextBSD-userland package — is a COMPLETE,
+          # bootable userland: the 11 /System/Library/LaunchDaemons plists, the
+          # /private/etc bootstrap (master.passwd, nsswitch, login.conf, pam.d,
+          # rc.d, ssh), boot/loader.conf.d, and usr/tests drivers. Consumers no
+          # longer apply a separate overlay — they only do the Apple /private
+          # symlink layout + pwd_mkdb/cap_mkdb finalization at assembly time.
+          cp -aR "${{ github.workspace }}/overlay/." /stage/
+          # master.passwd must be 0600 (git can't store sub-0644 modes); the
+          # /etc symlink is created by the consumer's apple_private_layout.
+          [ -f /stage/private/etc/master.passwd ] && chmod 0600 /stage/private/etc/master.passwd
           # (placeholder) re-apply setuid bits the unprivileged cross-install
           # drops — none in the Tier 0-2 system layer today.
           tar -C /stage -czf "/tmp/nextbsd-userland-${{ inputs.arch }}.tar.gz" .
