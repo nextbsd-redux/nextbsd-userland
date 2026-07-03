@@ -94,11 +94,12 @@ stage_rootfs() {
     install -m555 "$kbin" "$ROOTFS/boot/kernel/kernel"
     # driver kexts -> /System/Library/Extensions
     for m in ${MODULES_TGZ:-}; do [ -f "$m" ] && tar -C "$ROOTFS/System/Library/Extensions" -xzf "$m"; done
-    # Darwin userland (raw tar rooted at /) — now INCLUDES the authoritative
-    # overlay (LaunchDaemons, /private/etc, boot/loader.conf.d, usr/tests), so it
-    # is a complete userland; no separate overlay application is needed. Its
-    # /private/etc resolves via the /etc symlink set up by apple_private_layout.
+    # Darwin userland (raw tar rooted at /) — includes the MAINTAINED overlay
+    # (LaunchDaemons, services/protocols, usr/tests). The user-editable /etc
+    # (accounts, sshd_config, pam.d, fstab, the loader fragment) is NOT in the
+    # package any more; it is seeded from nextbsd-overlays next (mirrors build.sh).
     tar -C "$ROOTFS" -xzf "$USERLAND_TGZ"
+    seed_overlays
     apple_private_runtime
 }
 
@@ -118,6 +119,20 @@ apple_private_layout() {
     done
     # launchctl -w job-overrides DB dir (build.sh:118) so launchd loads cleanly.
     mkdir -p "$ROOTFS/private/var/db/launchd.db/com.apple.launchd"
+}
+
+# Seed the pkg-free, admin-owned /etc + loader fragment from nextbsd-overlays —
+# split out of the package so pkg upgrade can't clobber it (mirrors build.sh's
+# seed step). SEED_ROOTFS is a checkout of nextbsd-overlays/rootfs provided by
+# the workflow (cp -R onto the /private/etc laid out by apple_private_layout).
+seed_overlays() {
+    if [ -z "${SEED_ROOTFS:-}" ] || [ ! -d "$SEED_ROOTFS" ]; then
+        echo "ERROR: SEED_ROOTFS not set/found — /etc seed missing, login would have no users" >&2
+        exit 1
+    fi
+    cp -R "$SEED_ROOTFS/." "$ROOTFS/"
+    [ -f "$ROOTFS/private/etc/master.passwd" ] && chmod 0600 "$ROOTFS/private/etc/master.passwd"
+    log "seeded /etc from nextbsd-overlays ($SEED_ROOTFS)"
 }
 
 # /var skeleton + utmpx session files (build.sh:120-138). Without utx.active/
