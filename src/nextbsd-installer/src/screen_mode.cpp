@@ -20,7 +20,7 @@ Screen run_mode(ScreenInteractive& screen, AppState& st) {
 
   std::vector<std::string> entries = {
       "Install    Fresh install onto a selected disk",
-      "Shell      Drop to a live rescue shell",
+      "Shell      Return to shell prompt",
   };
   int selected = 0;
   auto menu = Menu(&entries, &selected);
