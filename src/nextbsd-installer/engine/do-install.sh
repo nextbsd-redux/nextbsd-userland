@@ -133,6 +133,16 @@ run cp "$MNT/boot/loader.efi" "$EFIMNT/EFI/BOOT/$EFIFILE"
 # Best-effort named UEFI boot entry (non-fatal: the removable path above already
 # boots if the firmware ignores or loses NVRAM entries, e.g. after a CMOS reset).
 if [ "${NEXTBSD_DRYRUN:-0}" != 1 ] && command -v efibootmgr >/dev/null 2>&1; then
+	# First delete every existing entry labelled exactly "NextBSD" so reinstalls
+	# don't stack up duplicate entries in the firmware boot menu. Silent, and the
+	# "$" anchor keeps the match exact — other OSes' entries are never touched.
+	# efibootmgr lists e.g. "+Boot0001* NextBSD"; capture the 4-hex bootnum.
+	efibootmgr 2>/dev/null \
+		| sed -n 's/^[[:space:]+-]*Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\}[[:space:]]\{1,\}NextBSD$/\1/p' \
+		| while read -r bootnum; do
+			efibootmgr -B -b "$bootnum" >/dev/null 2>&1 || true
+		done
+	# Then create the single fresh entry.
 	efibootmgr --create --activate --label NextBSD \
 		--loader "$EFIMNT/EFI/BOOT/$EFIFILE" >/dev/null 2>&1 || \
 		status "efibootmgr entry skipped (removable-path boot still installed)"
