@@ -393,7 +393,7 @@ fi
 #
 # Plan: https://pkgdemon.github.io/freebsd-apple-userland-cmds-plan.html#file_cmds
 FILECMD_FAIL=0
-for fbin in /bin/chflags /bin/mkdir /bin/mkfifo /bin/rmdir \
+for fbin in /bin/chflags /bin/mkdir /usr/bin/mkfifo /bin/rmdir \
             /usr/bin/pathchk \
             /bin/dd /bin/ln /bin/rm \
             /usr/bin/cksum /usr/bin/compress \
@@ -566,7 +566,7 @@ fi
 # Plan: https://pkgdemon.github.io/freebsd-apple-userland-cmds-plan.html#adv_cmds
 ADVCMD_FAIL=0
 for fbin in /usr/bin/tabs /usr/bin/tty /usr/bin/whois \
-            /usr/sbin/lsvfs \
+            /usr/bin/lsvfs \
             /usr/bin/cap_mkdb /usr/bin/finger \
             /usr/bin/locale \
             /bin/stty; do
@@ -583,7 +583,7 @@ done
 #   finger with no user prints header or "No one logged on".
 if [ $ADVCMD_FAIL -eq 0 ]; then
     echo "ADVCMD-PROBE: lsvfs"          # DIAG: label each probe so a SIGSEGV is attributable
-    if ! /usr/sbin/lsvfs >/dev/null 2>&1; then
+    if ! /usr/bin/lsvfs >/dev/null 2>&1; then
         echo "ADVCMD-LEAF-FAIL: lsvfs failed"
         ADVCMD_FAIL=1
     fi
