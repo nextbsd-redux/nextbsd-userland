@@ -147,6 +147,13 @@ jobs:
           gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
             --pattern '*kext*.tar.gz' --dir art --clobber || true
           export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          # pkg-free /etc seed: fetch nextbsd-overlays via the API (no git needed
+          # in the container) so the stripped userland package's missing /etc is
+          # seeded, exactly like nextbsd/build.sh does for the real image.
+          gh api repos/nextbsd-redux/nextbsd-overlays/tarball/main > /tmp/overlays.tar.gz
+          mkdir -p "$WORK/seed"
+          tar -C "$WORK/seed" --strip-components=1 -xzf /tmp/overlays.tar.gz
+          export SEED_ROOTFS="$WORK/seed/rootfs"
           chmod +x ci/assemble-image.sh
           ./ci/assemble-image.sh
 
