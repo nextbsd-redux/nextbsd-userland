@@ -63,10 +63,13 @@ int main(int argc, char** argv) {
         // usable console. If exec fails, fall through to a clean exit (which
         // returns to whatever launched the installer).
         if (!st.demo && !st.dry_run) {
-          // Clear the screen so the shell starts clean. No clear/tput binary
-          // needed — the console interprets these bare ANSI escapes itself:
-          // show cursor, reset attrs, erase screen + scrollback, home cursor.
-          std::fputs("\033[?25h\033[0m\033[2J\033[3J\033[H", stdout);
+          // Clear the screen so the shell starts clean. The FreeBSD vt/teken
+          // console ignores the alternate-screen buffer (FTXUI's frames land on
+          // the main screen) and the fancier ED sequences; RIS (ESC c) resets +
+          // clears it reliably, then erase-display + home. No clear/tput binary
+          // needed — the console interprets the escape itself. Verified on the
+          // vt console.
+          std::fputs("\033c\033[2J\033[H", stdout);
           std::fflush(nullptr);
           execl("/bin/sh", "sh", "-i", static_cast<char*>(nullptr));
         }

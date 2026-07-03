@@ -17,8 +17,7 @@ Screen run_finish(ScreenInteractive& screen, AppState& st) {
 
   auto reboot = Button("Reboot", [&] { next = Screen::Reboot; screen.Exit(); });
   auto shut = Button("Shut Down", [&] { next = Screen::Shutdown; screen.Exit(); });
-  auto sh = Button("Shell", [&] { next = Screen::Shell; screen.Exit(); });
-  auto layout = Container::Horizontal({reboot, shut, sh});
+  auto layout = Container::Horizontal({reboot, shut});
 
   const std::string disk = st.disks.empty() ? "?" : st.disks[st.disk_index].dev;
 
@@ -41,7 +40,7 @@ Screen run_finish(ScreenInteractive& screen, AppState& st) {
         theme::hint("Log in as root (no password), then set a password, add"),
         theme::hint("users, or change the hostname."),
         filler(),
-        hbox({reboot->Render(), text("  "), shut->Render(), text("  "), sh->Render()}),
+        hbox({reboot->Render(), text("  "), shut->Render()}),
     });
     return theme::chrome("Installation Complete", st.build_id, body,
                          {{"Tab", "move"}, {"Enter", "select"}});
