@@ -429,6 +429,15 @@ test -f "$DESTDIR/usr/lib/system/libCoreFoundation.so.6" \
 # =============================================================================
 tier "TIER 2 : launchd -> configd -> SC -> IOKit -> kext_tools -> notify -> syslog -> IPConfig -> mDNS -> DA -> hostnamed"
 
+# Man pages: bsd.man.mk's install doesn't mkdir MANDIR (same missing
+# distrib-dirs/hierarchy pass as BINDIR below). Pre-create the section dirs
+# once, up front, for every component that now ships a page (launchd/launchctl,
+# configd, libIOKit/ioreg, kext_tools, notifyd + libnotify, the syslog/ASL
+# stack, mDNSResponder, DiskArbitration, cpdup). libdispatch installs its
+# dispatch(3) pages via CMake, which creates its own destination dir.
+mkdir -p "$DESTDIR/usr/share/man/man1" "$DESTDIR/usr/share/man/man3" \
+         "$DESTDIR/usr/share/man/man5" "$DESTDIR/usr/share/man/man8"
+
 # ---- launchd daemon + launchctl ---------------------------------------------
 # build.sh ~1433-1493. launchd (bsd.prog.mk) consumes the I1a MIG stubs + CF;
 # launchctl links CF/ICU/xpc/dispatch/liblaunch via its Makefile + freebsd-shims.
