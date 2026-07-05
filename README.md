@@ -89,3 +89,43 @@ canonical locations these components read/write:
 Rule of thumb for new code: a shared/computer-wide resource goes under
 `/Local/Library`; an OS-shipped one under `/System/Library`; a per-user one under
 `~/Library`. Never introduce a bare `/Library/...` path.
+
+## Manpages
+
+Every shipped binary and library that has a man page installs it into
+`/usr/share/man/man<N>` at build time (the component Makefiles declare `MAN=`;
+`bsd.prog.mk`/`bsd.lib.mk` gzip and install them — `libdispatch` installs its
+via CMake). Pages are vendored from the same upstream tag as the code they
+document. Where an Apple page referenced a bare `/Library/...` path it is
+rewritten to the Local domain `/Local/Library/...` per the four-domain model
+above; `/System/Library` and `~/Library` paths are kept as-is.
+
+| Component | Manpage | Documents |
+|-----------|---------|-----------|
+| launchd | `man launchd` (8) | the PID 1 service manager |
+| launchd | `man launchctl` (1) | launchd control utility |
+| launchd | `man launchd.plist` (5) | job / agent / daemon plist format |
+| configd | `man configd` (8) | System Configuration daemon |
+| DiskArbitration | `man diskarbitrationd` (8) | disk arbitration daemon |
+| libIOKit | `man ioreg` (8) | I/O Kit registry viewer |
+| kext_tools | `man kextd` (8) | kext-loading daemon |
+| kext_tools | `man kextload` (8) | load a kernel extension |
+| kext_tools | `man kextunload` (8) | unload a kernel extension |
+| kext_tools | `man kextstat` (8) | list loaded kernel extensions |
+| Libnotify | `man notifyd` (8) | notification daemon |
+| Libnotify | `man notify` (3) | notify(3) API (plus the `notify_*` pages) |
+| syslog/ASL | `man syslogd` (8) | syslog daemon |
+| syslog/ASL | `man syslog` (1) | syslog command-line tool |
+| syslog/ASL | `man syslog.conf` (5), `man asl.conf` (5) | syslogd config formats |
+| syslog/ASL | `man aslmanager` (8) | ASL log-store manager |
+| syslog/ASL | `man asl` (3), `man syslog` (3) | ASL / syslog library API |
+| mDNSResponder | `man mDNSResponder` (8) | multicast DNS / DNS-SD responder |
+| libdispatch | `man dispatch` (3) | Grand Central Dispatch API (plus the `dispatch_*` pages) |
+| cpdup | `man cpdup` (1) | filesystem copy / mirror utility |
+
+**Shipped binaries with no man page** (deliberately none — not fabricated):
+`ipconfigd` (upstream ships only `ipconfig.8` for the client CLI, which NextBSD
+does not build — there is no daemon page), and `hostnamed` / `kextdeps`
+(NextBSD-original, no upstream page). `mig` / `migcom` ship man pages upstream
+but are host-only build tools not installed into the target userland, so their
+pages are not shipped.

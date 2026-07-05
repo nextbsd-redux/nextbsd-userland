@@ -25,7 +25,10 @@
 # Install: make DESTDIR=/path/to/rootfs install
 
 PROG=		mDNSResponder
-MAN=
+# Man page vendored from apple-oss-distributions/mDNSResponder
+# (mDNSShared/mDNSResponder.8); resolved via the .PATH to mDNSShared
+# below. bsd.prog.mk gzips + installs into MANDIR.
+MAN=		mDNSResponder.8
 
 # Source layout follows upstream Apple's mDNSPosix/Makefile DAEMONOBJS
 # (lines 254-259 there) minus DSO. PosixDaemon.c is the entry point;
@@ -48,7 +51,6 @@ SRCS+=		mdns_addr_tailq.c misc_utilities.c
 # variable, -Wparentheses, etc.). Same trade configd / libxpc / libCF /
 # libSystemConfiguration take.
 WARNS=		0
-NO_MAN=		yes
 
 # Upstream's CFLAGS_COMMON + the FreeBSD ifeq block at mDNSPosix/Makefile
 # lines 65 + 136-150.

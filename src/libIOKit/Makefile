@@ -28,7 +28,12 @@ SRCS=		IOKitLib.c IOKitMatching.c IOKitNotify.c
 # #warning) into hard errors. libxpc / libCoreFoundation /
 # libSystemConfiguration build at WARNS=0 for the same reason.
 WARNS=		0
-NO_MAN=		yes
+
+# Man page vendored from apple-oss-distributions/IOKitTools @ IOKitTools-125
+# (ioreg.tproj/ioreg.8) — documents the ioreg(8) tool build.sh links from
+# ioreg.c. This lib's `make install` (run by the driver) gzips + installs it
+# into MANDIR via bsd.lib.mk.
+MAN=		ioreg.8
 
 # -fblocks: the public header pulls CoreFoundation, and CoreFoundation's
 # ForSwiftFoundationOnly.h / CFCalendarPriv.h / CFStreamPriv.h declare

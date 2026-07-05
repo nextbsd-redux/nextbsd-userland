@@ -698,6 +698,11 @@ $CROSS_CC --sysroot="$SYSROOT" -O -pipe -std=gnu99 -D_ST_FLAGS_PRESENT_ \
     -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib" \
     -o "$DESTDIR/usr/bin/cpdup" "$SRC/cpdup/src/"*.c -lcrypto
 test -x "$DESTDIR/usr/bin/cpdup" || { echo "FAIL: /usr/bin/cpdup not installed"; exit 1; }
+# cpdup.1: the hand-link bypasses cpdup's GNUmakefile (which normally installs
+# the page), so install + gzip it here, mirroring that Makefile's man rule.
+mkdir -p "$DESTDIR/usr/share/man/man1"
+install -m 0644 "$SRC/cpdup/cpdup.1" "$DESTDIR/usr/share/man/man1/cpdup.1"
+gzip -9f "$DESTDIR/usr/share/man/man1/cpdup.1"
 
 # nextbsd-installer: CMake C++ — the FIRST C++ program in the pipeline. Its
 # CMakeLists add_subdirectory()s the vendored ../ftxui and links it statically,

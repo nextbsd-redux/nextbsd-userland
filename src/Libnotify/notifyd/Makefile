@@ -13,8 +13,10 @@
 # Install: /usr/sbin/notifyd
 
 PROG=		notifyd
-MAN=
-NO_MAN=		yes
+# Man page vendored from apple-oss-distributions/Libnotify @
+# 715d461778f6b93c821d99390a0078bd6f6d8c04 (notifyd/notifyd.8).
+# bsd.prog.mk gzips + installs into MANDIR.
+MAN=		notifyd.8
 WARNS?=		0
 
 SRCS=		notifyd.c \

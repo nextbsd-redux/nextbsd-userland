@@ -17,7 +17,9 @@
 # Install: make DESTDIR=/path/to/rootfs install
 
 PROG=		configd
-MAN=
+# Man page vendored from apple-oss-distributions/configd @ configd-1405.120.5 (configd.tproj/configd.8).
+# bsd.prog.mk gzips + installs into MANDIR.
+MAN=		configd.8
 
 SRCS=		configd.c config_store.c config_session.c config_wire.c \
 		config_link_monitor.c
@@ -44,7 +46,6 @@ CFLAGS+=		-Wno-macro-redefined
 .endif
 
 WARNS?=		6
-NO_MAN=		yes
 
 CFLAGS+=	-O2 -pipe
 CFLAGS+=	-Wall -Wextra -Wshadow -Wstrict-prototypes

@@ -24,7 +24,23 @@ SHLIB_MAJOR=	1
 
 # Vendored Apple source — don't gate on its warnings.
 WARNS?=		0
-NO_MAN=		yes
+
+# Man pages vendored from apple-oss-distributions/Libnotify @
+# 715d461778f6b93c821d99390a0078bd6f6d8c04 (repo root). notify.3 is
+# the API page; the notify_*.3 are .so redirects to it. bsd.lib.mk
+# gzips + installs into MANDIR.
+MAN=		notify.3 \
+		notify_cancel.3 \
+		notify_check.3 \
+		notify_get_state.3 \
+		notify_is_valid_token.3 \
+		notify_post.3 \
+		notify_register_check.3 \
+		notify_register_dispatch.3 \
+		notify_register_file_descriptor.3 \
+		notify_register_mach_port.3 \
+		notify_register_signal.3 \
+		notify_set_state.3
 
 SRCS=		libnotify.c \
 		notify_client.c \

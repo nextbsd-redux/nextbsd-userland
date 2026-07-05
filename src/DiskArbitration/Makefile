@@ -12,10 +12,10 @@
 # Install: make DESTDIR=/path/to/rootfs install
 
 PROG=		diskarbitrationd
-MAN=
+# Man page vendored from apple-oss-distributions/DiskArbitration @ DiskArbitration-535.120.1.0.1 (diskarbitrationd/diskarbitrationd.8).
+# bsd.prog.mk gzips + installs into MANDIR.
+MAN=		diskarbitrationd.8
 SRCS=		diskarbitrationd.c da_iokit_subscribe.c
-
-NO_MAN=		yes
 
 # WARNS=0: da_iokit_subscribe.c pulls <IOKit/IOKitLib.h>, which drags in the
 # whole CoreFoundation + dispatch public header tree (the IONotificationPort /
