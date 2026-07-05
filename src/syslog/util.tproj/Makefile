@@ -5,8 +5,9 @@
 # and base has no /usr/bin/syslog.
 
 PROG=		syslog
-MAN=
-NO_MAN=		yes
+# Man page(s) vendored from apple-oss-distributions/syslog @ 69d8586
+# (util.tproj/). bsd.prog.mk gzips + installs into MANDIR.
+MAN=		syslog.1
 WARNS?=		0
 
 SRCS=		syslog.c

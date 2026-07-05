@@ -4,8 +4,9 @@
 # /usr/sbin/syslogd. Plan: pkgdemon.github.io/freebsd-asl-plan.html
 
 PROG=		syslogd
-MAN=
-NO_MAN=		yes
+# Man page(s) vendored from apple-oss-distributions/syslog @ 69d8586
+# (syslogd.tproj/). bsd.prog.mk gzips + installs into MANDIR.
+MAN=		syslogd.8 syslog.conf.5 asl.conf.5
 WARNS?=		0
 
 SRCS=		syslogd.c \

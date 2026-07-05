@@ -1,6 +1,9 @@
 PROG=	kextd
 SRCS=	kextd.c
-MAN=
+
+# Man page vendored from apple-oss-distributions/kext_tools @ kext_tools-779
+# (kextd.8). bsd.prog.mk gzips + installs into MANDIR.
+MAN=	kextd.8
 
 # kextd pushes kext IOKitPersonalities into the in-kernel IOCatalogue (U1,
 # nextbsd#217). Same link set as kextload/kextdeps: libkext.a (Apple's OSKext

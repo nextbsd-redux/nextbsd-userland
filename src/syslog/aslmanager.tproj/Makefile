@@ -3,8 +3,9 @@
 # out /var/log/asl/* into Archive/. Installed at /usr/sbin/.
 
 PROG=		aslmanager
-MAN=
-NO_MAN=		yes
+# Man page(s) vendored from apple-oss-distributions/syslog @ 69d8586
+# (aslmanager.tproj/). bsd.prog.mk gzips + installs into MANDIR.
+MAN=		aslmanager.8
 WARNS?=		0
 
 SRCS=		aslmanager.c daemon.c

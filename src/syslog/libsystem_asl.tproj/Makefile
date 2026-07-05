@@ -16,7 +16,10 @@ SHLIB_MAJOR=	1
 
 WARNS?=		0
 CFLAGS+=	-include ${.CURDIR}/src/asl_stubs.h	# prototypes for asl_stubs.c os_*/mbr stubs
-NO_MAN=		yes
+# Man page(s) vendored from apple-oss-distributions/syslog @ 69d8586
+# (libsystem_asl.tproj/man/). bsd.lib.mk gzips + installs into MANDIR.
+.PATH:		${.CURDIR}/man
+MAN=		asl.3 syslog.3
 
 SRCS=		asl.c \
 		asl_msg.c \

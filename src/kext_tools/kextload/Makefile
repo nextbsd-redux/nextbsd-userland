@@ -1,6 +1,10 @@
 PROG=	kextload
 SRCS=	kextload.c
 
+# Man page vendored from apple-oss-distributions/kext_tools @ kext_tools-779
+# (kextload.8). bsd.prog.mk gzips + installs into MANDIR.
+MAN=	kextload.8
+
 # Graduated to the OSKext engine (#196): links libkext.a (../kext.subproj) +
 # CoreFoundation + IOKit + zlib, same as kextdeps. Built AFTER libIOKit by
 # build.sh (kextdeps needs IORegistryEntryCreateCFProperty). OSKext.h needs the

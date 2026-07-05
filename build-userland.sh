@@ -429,6 +429,15 @@ test -f "$DESTDIR/usr/lib/system/libCoreFoundation.so.6" \
 # =============================================================================
 tier "TIER 2 : launchd -> configd -> SC -> IOKit -> kext_tools -> notify -> syslog -> IPConfig -> mDNS -> DA -> hostnamed"
 
+# Man pages: bsd.man.mk's install doesn't mkdir MANDIR (same missing
+# distrib-dirs/hierarchy pass as BINDIR below). Pre-create the section dirs
+# once, up front, for every component that now ships a page (launchd/launchctl,
+# configd, libIOKit/ioreg, kext_tools, notifyd + libnotify, the syslog/ASL
+# stack, mDNSResponder, DiskArbitration, cpdup). libdispatch installs its
+# dispatch(3) pages via CMake, which creates its own destination dir.
+mkdir -p "$DESTDIR/usr/share/man/man1" "$DESTDIR/usr/share/man/man3" \
+         "$DESTDIR/usr/share/man/man5" "$DESTDIR/usr/share/man/man8"
+
 # ---- launchd daemon + launchctl ---------------------------------------------
 # build.sh ~1433-1493. launchd (bsd.prog.mk) consumes the I1a MIG stubs + CF;
 # launchctl links CF/ICU/xpc/dispatch/liblaunch via its Makefile + freebsd-shims.
@@ -698,6 +707,11 @@ $CROSS_CC --sysroot="$SYSROOT" -O -pipe -std=gnu99 -D_ST_FLAGS_PRESENT_ \
     -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib" \
     -o "$DESTDIR/usr/bin/cpdup" "$SRC/cpdup/src/"*.c -lcrypto
 test -x "$DESTDIR/usr/bin/cpdup" || { echo "FAIL: /usr/bin/cpdup not installed"; exit 1; }
+# cpdup.1: the hand-link bypasses cpdup's GNUmakefile (which normally installs
+# the page), so install + gzip it here, mirroring that Makefile's man rule.
+mkdir -p "$DESTDIR/usr/share/man/man1"
+install -m 0644 "$SRC/cpdup/cpdup.1" "$DESTDIR/usr/share/man/man1/cpdup.1"
+gzip -9f "$DESTDIR/usr/share/man/man1/cpdup.1"
 
 # nextbsd-installer: CMake C++ — the FIRST C++ program in the pipeline. Its
 # CMakeLists add_subdirectory()s the vendored ../ftxui and links it statically,
