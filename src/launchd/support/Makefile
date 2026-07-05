@@ -19,13 +19,14 @@
 #   - launchd's own liblaunch/ public headers (launch.h, vproc.h, ...)
 
 PROG=		launchctl
-MAN=
+# Man page vendored from apple-oss-distributions/launchd @ launchd-842.92.1
+# man/launchctl.1 (unmodified mdoc). bsd.prog.mk gzips + installs it.
+MAN=		launchctl.1
 
 SRCS=		launchctl.c
 
 # Vendored Apple source — don't gate on its warnings.
 WARNS?=		0
-NO_MAN=		yes
 
 CFLAGS+=	-I${.CURDIR}/../liblaunch	# launch.h, vproc.h, bootstrap.h, ...
 CFLAGS+=	-I${.CURDIR}/../src		# config.h shared with the daemon

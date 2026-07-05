@@ -24,7 +24,9 @@
 #   - launchd's own liblaunch/ public headers (launch.h, vproc.h, ...)
 
 PROG=		launchd
-MAN=
+# Man pages vendored from apple-oss-distributions/launchd @ launchd-842.92.1
+# man/ (unmodified mdoc). bsd.prog.mk gzips + installs them into MANDIR.
+MAN=		launchd.8 launchd.plist.5
 
 # MIGOUT — directory holding the mig-generated *User.c / *Server.c /
 # *.h. build.sh sets this to $WORK/launchd-mig. Empty on a bare
@@ -72,7 +74,6 @@ SRCS+=		jobUser.c jobServer.c \
 
 # Vendored Apple source — don't gate on its warnings.
 WARNS?=		0
-NO_MAN=		yes
 
 CFLAGS+=	-I${.CURDIR}			# config.h, core.h, launchd.h, ...
 CFLAGS+=	-I${.CURDIR}/../liblaunch	# launch.h, vproc.h, bootstrap.h, ...
