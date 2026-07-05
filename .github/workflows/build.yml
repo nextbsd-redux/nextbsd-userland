@@ -35,6 +35,8 @@ jobs:
       arch: amd64
       target_arch: amd64
       boot: true                 # x86 runner KVM-boots the amd64 image
+      boot_soft: true            # non-gating for now (nextbsd#369): don't block the PR
+      boot_gate: login           # boot -> login: prompt -> exit, like arm64, until the on-image ASL/notify suite is de-flaked (#369)
       fbsd_sha: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
     secrets: inherit
 

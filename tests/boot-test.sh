@@ -579,27 +579,14 @@ expect {
 # Stage 3+ Phase J runtime: syslogd + notifyd RunAtLoad via plists,
 # then syslog(1) post + read-back round-trip via Mach IPC into the
 # ASL store. See run.sh tail for the test sequence.
-#
-# These notifyd/syslogd ASL round-trips intermittently stall on amd64 under
-# single-threaded TCG emulation — the daemon parks in mach_msg_receive and the
-# check reports *-FAIL even though the identical overlay passes reliably on
-# arm64. Tracked in nextbsd-redux/nextbsd#369. Until it's root-caused, treat the
-# explicit *-FAIL markers as NON-GATING on amd64 only; arm64 stays hard-gated,
-# and a *missing* marker (timeout below) still fails everywhere so a real boot
-# hang is never masked.
-set asl_soft [expr {$env(ARCH) eq "amd64"}]
 expect {
     timeout {
         puts "\nFAIL: NOTIFYD-PROC marker not seen"
         exit 1
     }
     "NOTIFYD-PROC-FAIL" {
-        if {$asl_soft} {
-            puts "\nWARN: notifyd not running at boot (amd64 emulation flake; nextbsd#369)"
-        } else {
-            puts "\nFAIL: notifyd not running at boot"
-            exit 1
-        }
+        puts "\nFAIL: notifyd not running at boot"
+        exit 1
     }
     "NOTIFYD-PROC-OK" { puts "\nOK: notifyd running" }
 }
@@ -609,12 +596,8 @@ expect {
         exit 1
     }
     "SYSLOGD-PROC-FAIL" {
-        if {$asl_soft} {
-            puts "\nWARN: syslogd not running at boot (amd64 emulation flake; nextbsd#369)"
-        } else {
-            puts "\nFAIL: syslogd not running at boot"
-            exit 1
-        }
+        puts "\nFAIL: syslogd not running at boot"
+        exit 1
     }
     "SYSLOGD-PROC-OK" { puts "\nOK: syslogd running" }
 }
@@ -624,12 +607,8 @@ expect {
         exit 1
     }
     "SYSLOG-RUN-FAIL" {
-        if {$asl_soft} {
-            puts "\nWARN: syslog(1) post/read round-trip failed (amd64 emulation flake; nextbsd#369)"
-        } else {
-            puts "\nFAIL: syslog(1) post/read round-trip failed"
-            exit 1
-        }
+        puts "\nFAIL: syslog(1) post/read round-trip failed"
+        exit 1
     }
     "SYSLOG-RUN-SKIP" { puts "\nSKIP: syslog round-trip blocked by launch_msg hang (task #41)" }
     "SYSLOG-RUN-OK" { puts "\nOK: syslog round-trip works" }
