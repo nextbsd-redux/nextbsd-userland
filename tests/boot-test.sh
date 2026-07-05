@@ -187,6 +187,46 @@ proc loader_set {cmd} {
     set timeout $saved
 }
 
+# loader_boot — issue the final `boot`, robust to the emulated UART dropping a
+# char on INPUT (not just the echo). A dropped input char makes the loader read
+# e.g. `bot` and print "unknown command", leaving us stuck at the OK prompt
+# forever (run 28754808354, amd64). Unlike loader_set's variable commands, a
+# garbled boot never self-recovers — so detect the reject (or a re-appeared OK
+# prompt) and resend. Success = the loader leaves the prompt to start the
+# kernel: no "unknown command" and no fresh "OK " within the settle window.
+proc loader_boot {} {
+    global timeout
+    set saved $timeout
+    set timeout 10
+    for {set try 1} {$try <= 5} {incr try} {
+        sleep 0.3
+        expect *
+        send -s -- "boot\r"
+        expect {
+            "unknown command" {
+                puts "\n==> loader garbled 'boot' (try $try/5); resending"
+                continue
+            }
+            -re "Booting|/boot/kernel/kernel|Loading kernel|---<<" {
+                set timeout $saved
+                return
+            }
+            "OK " {
+                puts "\n==> loader still at prompt after 'boot' (try $try/5); resending"
+                continue
+            }
+            timeout {
+                # No reject and no fresh OK prompt within the window => the
+                # kernel is loading. Hand off to the Stage 1a banner capture.
+                set timeout $saved
+                return
+            }
+        }
+    }
+    puts "\nFAIL: loader never accepted 'boot' after 5 tries (UART input drop)"
+    exit 1
+}
+
 # Dropped vidconsole from the console var: QEMU CI runs with -display none, so
 # vidconsole always fails to bind and the loader prints "console vidconsole is
 # unavailable" every boot. comconsole alone suffices for serial-only capture.
@@ -210,7 +250,7 @@ if {$env(ARCH) eq "amd64"} {
     loader_set "set mach.debug_enable=1"
     loader_set "set launchd_trace=1"
 }
-send -s -- "boot\r"
+loader_boot
 
 # Stage 1a: capture getty's boot banner. PAM port iter 4 (issue #99)
 # restored RunAtLoad on com.apple.hostnamed.plist so hostnamed runs
