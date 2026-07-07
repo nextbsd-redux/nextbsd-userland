@@ -14,6 +14,7 @@ per Apple convention).
 | `mDNSCore/` | Platform-agnostic mDNS protocol engine: `mDNS.c`, `DNSDigest.c`, `uDNS.c`, `DNSCommon.c`. Pure RFC 6762/6763 + DNS message parsing. Zero Mach surface. |
 | `mDNSPosix/` | POSIX platform binding: `mDNSPosix.c` (kqueue + sockets), `mDNSUNP.c` (UNP helpers), `PosixDaemon.c` (the daemon's `main`). |
 | `mDNSShared/` | Cross-cut shared code: `uds_daemon.c` (Unix Domain Socket server), `dnssd_ipc.c`, `ClientRequests.c`, `dnssd_clientshim.c`, `mDNSDebug.c`, `GenLinkedList.c`, `PlatformCommon.c`, plus `utilities/mdns_addr_tailq.c` + `utilities/misc_utilities.c`. |
+| `Clients/` | The reference DNS-SD command-line client — `dns-sd.c` (browse `-B`, resolve `-L`, register `-R`, getaddrinfo `-G`, enumerate types via `-B _services._dns-sd._udp`) + `ClientCommon.c`. Links `libdns_sd`; installed as `/usr/bin/dns-sd`. Man page is `mDNSShared/dns-sd.1`. Only these two files are taken (verbatim). |
 
 ## Skipped — what we intentionally don't vendor
 
@@ -22,7 +23,7 @@ per Apple convention).
 | `DSO/` | DNS Stateful Operations (RFC 8490). Required only when `MDNSRESPONDER_SUPPORTS_COMMON_DNS_PUSH=1` is set, and the default in `mDNSShared/mDNSFeatures.h` is 0 — so the `#if MDNSRESPONDER_SUPPORTS(COMMON, DNS_PUSH)` blocks in `mDNSCore/uDNS.c` + `uDNS.h` are excluded at the preprocessor level. DSO also pulls `srp-features.h` + `srp-log.h` from `ServiceRegistration/`, which in turn pull Apple-only `<os/log.h>`. Skipping DSO cleanly avoids the entire dependency tree. iter 7+ can revisit if DNS Push becomes a real consumer demand. |
 | `mDNSMacOSX/` | Apple-tied platform binding — IOKit, KeychainServices, SystemConfiguration-private, powerd. None translate to FreeBSD; the cross-platform `mDNSPosix/` is what we use instead. |
 | `mDNSWindows/` | Windows platform binding. Out of scope. |
-| `Clients/` | Command-line clients (\`dns-sd\`, etc.) — interesting later but not iter 2. |
+| `Clients/` (rest) | Only `dns-sd.c` + `ClientCommon.c` are vendored (see the subdir map above). The remaining clients, unit tests, and the Xcode / Visual Studio project files remain out of scope. |
 | `ServiceRegistration/` | SRP / Thread border-router specific. Not needed for the standalone mDNSResponder daemon. |
 | `mDNSResponder.proj/` + `Documents/` | Xcode + docs, not source. |
 
