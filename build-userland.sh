@@ -663,7 +663,13 @@ run_buildenv "make -C $SRC/mDNSResponder/libdns_sd DESTDIR=$DESTDIR SYSROOT=$SYS
 sync_sysroot
 test -f "$DESTDIR/usr/lib/system/libdns_sd.so.1" || { echo "FAIL: libdns_sd.so.1 not installed"; exit 1; }
 test -f "$DESTDIR/usr/include/dns_sd.h"          || { echo "FAIL: /usr/include/dns_sd.h not installed"; exit 1; }
-echo "==> mDNSResponder + libdns_sd built"
+
+# dns-sd command-line client (bsd.prog.mk). Links the libdns_sd built+synced
+# above; installs /usr/bin/dns-sd. Upstream Clients/dns-sd.c + ClientCommon.c.
+comp "dns-sd"
+run_buildenv "make -C $SRC/mDNSResponder/Clients DESTDIR=$DESTDIR SYSROOT=$SYSROOT all install"
+test -x "$DESTDIR/usr/bin/dns-sd" || { echo "FAIL: /usr/bin/dns-sd not installed"; exit 1; }
+echo "==> mDNSResponder + libdns_sd + dns-sd built"
 # DROPPED: mdnstest/dnssdtest (host-exec).
 
 # ---- DiskArbitration --------------------------------------------------------
