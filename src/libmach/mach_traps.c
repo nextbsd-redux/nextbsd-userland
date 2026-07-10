@@ -501,8 +501,18 @@ mach_port_request_notification(mach_port_name_t task,
 		num = resolve_syscall("mach_port_request_notification");
 		resolved = 1;
 	}
+	/*
+	 * Pass SIX args, dropping `task`: FreeBSD's libc syscall() only reliably
+	 * passes 6 args through the amd64 kernel ABI (the kernel's own comment at
+	 * mach_syscall_wire.c documents this — mach_msg_trap hit the same wall). The
+	 * 7th arg here would be `previous`, the OUT-pointer we must not lose, so we
+	 * drop the redundant `task` instead: the kernel trap ignores a target and
+	 * operates on current_task()'s space, exactly like every other Mach trap in
+	 * that tree. The kernel-side arg struct is therefore
+	 * {name, msgid, sync, notify, notifyPoly, previous}. (nextbsd#347/#353)
+	 */
 	if (num != NO_SYSCALL)
-		return ((kern_return_t)syscall(num, task, name, msgid, sync,
+		return ((kern_return_t)syscall(num, name, msgid, sync,
 		    notify, notifyPoly, previous));
 
 	/* No kernel trap: boot-safe no-op (launchd requires KERN_SUCCESS). */
