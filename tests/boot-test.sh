@@ -1373,8 +1373,12 @@ expect {
     eof       { puts "\nOK: VM exited" }
 }
 
-close
-wait
+# A clean halt hits eof, which auto-closes the spawn — an explicit `close` then
+# throws "spawn id ... not open" and (uncaught) fails an otherwise-passing boot.
+# Harmless today under boot_soft, but a real gate breaker once amd64 hard-gates.
+# Guard both so teardown never turns a green boot red. (#369)
+catch { close }
+catch { wait }
 exit 0
 EOF
 
