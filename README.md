@@ -113,12 +113,14 @@ which flag to turn off.
 
 **`mach.debug_enable` is expensive on an emulated console.** Kernel `printf` to a
 115200 serial console is synchronous and blocks the writing thread. A traced boot
-emits ~1800 such lines (~144 KB, ~12 s of blocking writes), which is enough to
-perturb timing-sensitive Mach handshakes under single-threaded TCG — see
-[nextbsd#369](https://github.com/nextbsd-redux/nextbsd/issues/369), where it
-correlates with `syslogd` stalling in `mach_msg_receive`. `boot_mutemsgs="YES"`
-hides this cost rather than removing it: the `printf` still runs, it just isn't
-displayed. This is why CI leaves `BOOT_TRACE` off and only sets it for
+emits ~1800 such lines (~144 KB, ~12 s of blocking writes), enough to measurably
+change the timing of a single-threaded TCG boot. Whether that perturbs the Mach
+handshakes in [nextbsd#369](https://github.com/nextbsd-redux/nextbsd/issues/369)
+is **not established** — disabling the trace did not make the amd64 boot green;
+it surfaced a different failure (a `notifyd` SIGSEGV). Treat the flood as a
+confound to eliminate when reading a boot log, not as a known cause. Note that
+`boot_mutemsgs="YES"` hides this cost rather than removing it: the `printf` still
+runs, it just isn't displayed. CI leaves `BOOT_TRACE` off and sets it only for
 root-cause runs.
 
 Note that `boot_mutemsgs` **cannot** hide userland output: `RB_MUTEMSGS` gates
