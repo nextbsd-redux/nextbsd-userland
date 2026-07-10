@@ -111,17 +111,16 @@ lines carry a `<comm>:<tid>` prefix (`[T41] launchd:100002 …`); userland lines
 not. When a boot log is drowning in `[T41]`, check the prefix before deciding
 which flag to turn off.
 
-**`mach.debug_enable` is expensive on an emulated console.** Kernel `printf` to a
+**`mach.debug_enable` is expensive on a serial console.** Kernel `printf` to a
 115200 serial console is synchronous and blocks the writing thread. A traced boot
-emits ~1800 such lines (~144 KB, ~12 s of blocking writes), enough to measurably
-change the timing of a single-threaded TCG boot. Whether that perturbs the Mach
-handshakes in [nextbsd#369](https://github.com/nextbsd-redux/nextbsd/issues/369)
-is **not established** — disabling the trace did not make the amd64 boot green;
-it surfaced a different failure (a `notifyd` SIGSEGV). Treat the flood as a
-confound to eliminate when reading a boot log, not as a known cause. Note that
-`boot_mutemsgs="YES"` hides this cost rather than removing it: the `printf` still
-runs, it just isn't displayed. CI leaves `BOOT_TRACE` off and sets it only for
-root-cause runs.
+emits ~1800 such lines (~144 KB, ~12 s of blocking writes), which measurably
+changes boot timing. It is *not* an established cause of the Mach-handshake
+failures in [nextbsd#369](https://github.com/nextbsd-redux/nextbsd/issues/369):
+disabling the trace did not make the amd64 boot green, and both #369 failure
+modes reproduce with zero `[T41]` lines. Treat the flood as a confound to
+eliminate when reading a boot log, not as a cause. Note that `boot_mutemsgs="YES"`
+hides this cost rather than removing it: the `printf` still runs, it just isn't
+displayed. CI leaves `BOOT_TRACE` off and sets it only for root-cause runs.
 
 Note that `boot_mutemsgs` **cannot** hide userland output: `RB_MUTEMSGS` gates
 kernel `printf`, while test markers and daemon `stderr` reach the console through
