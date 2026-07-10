@@ -27,6 +27,18 @@ static void _dispatch_timer_unote_register(dispatch_timer_source_refs_t dt,
 static void _dispatch_timer_unote_resume(dispatch_timer_source_refs_t dt);
 static void _dispatch_timer_unote_unregister(dispatch_timer_source_refs_t dt);
 
+#if defined(__FreeBSD__) && HAVE_MACH
+/* FreeBSD kqueue has no EV_UDATA_SPECIFIC (0x0100 == EV_FORCEONESHOT there).
+ * Only native EVFILT_MACHPORT message channels need the direct-knote path;
+ * every other source takes the portable muxnote path — matching Gershwin/
+ * upstream fd-source behavior and avoiding the direct-knote model that is
+ * incorrect on a kernel without udata-specific knote identity. */
+#define _dispatch_dst_wants_direct(dst) \
+		(((dst)->dst_flags & EV_UDATA_SPECIFIC) && (dst)->dst_filter == EVFILT_MACHPORT)
+#else
+#define _dispatch_dst_wants_direct(dst)	((dst)->dst_flags & EV_UDATA_SPECIFIC)
+#endif
+
 DISPATCH_NOINLINE
 static dispatch_unote_t
 _dispatch_unote_create(dispatch_source_type_t dst,
@@ -43,7 +55,7 @@ _dispatch_unote_create(dispatch_source_type_t dst,
 		return DISPATCH_UNOTE_NULL;
 	}
 
-	if (dst->dst_flags & EV_UDATA_SPECIFIC) {
+	if (_dispatch_dst_wants_direct(dst)) {
 		du = _dispatch_calloc(1u, dst->dst_size);
 	} else {
 		dul = _dispatch_calloc(1u, sizeof(*dul) + dst->dst_size);
@@ -54,7 +66,7 @@ _dispatch_unote_create(dispatch_source_type_t dst,
 	du->du_ident = (dispatch_unote_ident_t)handle;
 	du->du_filter = dst->dst_filter;
 	du->du_fflags = (__typeof__(du->du_fflags))mask;
-	if (dst->dst_flags & EV_UDATA_SPECIFIC) {
+	if (_dispatch_dst_wants_direct(dst)) {
 		du->du_is_direct = true;
 	}
 	return (dispatch_unote_t){ ._du = du };

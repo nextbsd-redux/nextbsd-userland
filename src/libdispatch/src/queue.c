@@ -3632,8 +3632,28 @@ _dispatch_lane_drain(dispatch_lane_t dq, dispatch_invoke_context_t dic,
 			break;
 		}
 		if (likely(flags & DISPATCH_INVOKE_WORKLOOP_DRAIN)) {
-			dispatch_workloop_t dwl = (dispatch_workloop_t)_dispatch_get_wlh();
-			if (unlikely(_dispatch_queue_max_qos(dwl) > dwl->dwl_drained_qos)) {
+			/*
+			 * _dispatch_get_wlh() may legitimately return DISPATCH_WLH_ANON
+			 * (~0x3ul), not a workloop: _dispatch_workloop_invoke() always sets
+			 * DISPATCH_INVOKE_WORKLOOP_DRAIN, but a real wlh is only ever
+			 * adopted on the kevent-workloop path, and
+			 * HAVE_PTHREAD_WORKQUEUE_WORKLOOP is 0 everywhere but Darwin (it is
+			 * gated on WORKQ_FEATURE_WORKLOOP + KEVENT_FLAG_WORKLOOP +
+			 * DISPATCH_MIN_REQUIRED_OSX_AT_LEAST(101300)). Casting the sentinel
+			 * and reading dwl_drained_qos then faults at ANON+0x64.
+			 *
+			 * _dispatch_wlh_to_workloop() returns NULL for ANON and for any wlh
+			 * whose metatype isn't _DISPATCH_WORKLOOP_TYPE. No workloop means no
+			 * drained-QoS ceiling to honour, so skip the narrowing check.
+			 *
+			 * On Darwin the wlh IS the workloop, so this is a no-op there.
+			 * See nextbsd#369: notifyd SIGSEGV at si_addr=0x38 (= 0x3c - 4)
+			 * draining its Mach channel from _dispatch_mach_invoke().
+			 */
+			dispatch_workloop_t dwl =
+					_dispatch_wlh_to_workloop(_dispatch_get_wlh());
+			if (dwl && unlikely(_dispatch_queue_max_qos(dwl) >
+					dwl->dwl_drained_qos)) {
 				break;
 			}
 		}
