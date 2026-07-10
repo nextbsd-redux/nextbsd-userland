@@ -915,6 +915,31 @@ _dispatch_kq_unote_set_kevent(dispatch_unote_t _du, dispatch_kevent_t dk,
 		flags &= ~EV_VANISHED;
 	}
 
+#if defined(__FreeBSD__)
+	/*
+	 * EV_UDATA_SPECIFIC (0x0100) and EV_VANISHED (0x0200) are libdispatch-
+	 * internal markers here, NOT wire flags: FreeBSD's kqueue already spends
+	 * those two bits on EV_FORCEONESHOT and EV_KEEPUDATA (sys/sys/event.h).
+	 * Sending either to kevent(2) is wrong for every filter:
+	 *
+	 *   EV_FORCEONESHOT -> kn_flags |= EV_ONESHOT + KNOTE_ACTIVATE
+	 *                      (kern_event.c) — the knote is deleted after one
+	 *                      delivery and the source never re-arms.
+	 *   EV_ADD|EV_KEEPUDATA -> EINVAL, rejected outright (kern_event.c) —
+	 *                      the registration silently fails and the unote is
+	 *                      never armed at all.
+	 *
+	 * Both bits describe how *libdispatch* identifies and reclaims a knote;
+	 * the kernel is not meant to see them. Mask them off after the flags have
+	 * served their purpose above. This applies to EVFILT_MACHPORT too — it is
+	 * the only source type carrying EV_VANISHED, so it is precisely the one
+	 * that hit the EINVAL and left notifyd with an unarmed Mach channel.
+	 * FreeBSD updates kn_kevent.udata on re-registration by default, which is
+	 * the behaviour the direct-knote path wants, so nothing is lost.
+	 */
+	flags &= (uint16_t)~(EV_UDATA_SPECIFIC | EV_VANISHED);
+#endif
+
 	*dk = (dispatch_kevent_s){
 		.ident  = du->du_ident,
 		.filter = dst->dst_filter,
