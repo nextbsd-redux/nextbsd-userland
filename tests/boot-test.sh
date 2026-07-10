@@ -49,7 +49,14 @@ ARCH="${ARCH:-amd64}"
 #                    into the shell just wastes the 8-min login timeout. Proving
 #                    boot->login is the meaningful arm64 smoke for now.
 BOOT_GATE="${BOOT_GATE:-full}"
-echo "==> boot test: $IMG  (arch=$ARCH, gate=$BOOT_GATE)"
+# BOOT_TRACE=1 turns on the mach.debug_enable + launchd_trace kenvs at the
+# loader. OFF by default (nextbsd#369): those trace points are kernel printf,
+# so with the console un-muted they push ~1800 lines (~144KB, ~12s of blocking
+# writes at 115200) through the emulated UART during a single-threaded TCG boot
+# — right through the notifyd/syslogd Mach handshake that #369 says is racing
+# under load. Set BOOT_TRACE=1 to get the paper trail back when root-causing.
+BOOT_TRACE="${BOOT_TRACE:-0}"
+echo "==> boot test: $IMG  (arch=$ARCH, gate=$BOOT_GATE, trace=$BOOT_TRACE)"
 ls -lh "$IMG"
 
 # Arch-specific qemu shape: binary, machine type, NIC model, TCG cpu, and the
@@ -102,7 +109,7 @@ if [ -z "$FW" ]; then
 fi
 echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ARCH BOOT_GATE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
+export ARCH BOOT_GATE BOOT_TRACE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -234,19 +241,34 @@ loader_set "set console=comconsole"
 loader_set "set boot_serial=YES"
 loader_set "set comconsole_speed=115200"
 loader_set "set boot_multicons=YES"
+# Undo the shipped console mute for CI only (nextbsd#363, nextbsd#369).
+# nextbsd-overlays' /boot/loader.conf.d/nextbsd.conf sets boot_mutemsgs="YES" so
+# a normal boot has a macOS-clean login console. That mutes the kernel console
+# for the whole boot, and the on-image test markers this script matches ride the
+# same console — so with the mute in place the expect blocks below time out on
+# markers that were in fact emitted. Clear it here, the same way and in the same
+# place we opt CI into the serial console: the shipped image stays quiet, CI
+# sees everything. `NO` (not `unset`) is deliberate — the loader's howto builder
+# does `val != NULL && strcasecmp(val, "no") != 0` (sys/kern/subr_boot.c
+# boot_env_to_howto), so `=NO` clears RB_MUTEMSGS while keeping the variable set.
+loader_set "set boot_mutemsgs=NO"
 # Verbose diagnostic trace toggles. CI-only — the shipped ISO is silent by
 # default. The kernel reads mach.debug_enable as a tunable (CTLFLAG_RWTUN) at
 # boot; launchd PID 1 and libxpc both read kenv "launchd_trace=1" once at
-# startup. Together these gate the [T41-*]/[T39-*] trace points; on amd64 (KVM)
-# they're a cheap paper trail for the next regression.
+# startup. Together these gate the [T41-*]/[T39-*] trace points.
 #
-# AMD64 ONLY: on arm64 there is no KVM on the hosted runner, so the boot runs
-# under single-thread TCG. The trace flood (~6.8k lines last run) then both
-# crawls the emulated boot AND buries the test markers, so the suite can't
-# finish in the window. Skip the trace on arm64 — the markers the expect blocks
-# below match come from the on-image run.sh, not from these trace points, so
-# nothing downstream needs them.
-if {$env(ARCH) eq "amd64"} {
+# OFF by default on BOTH arches now (nextbsd#369). It was already off on arm64,
+# where the flood "crawls the emulated boot" under single-thread TCG. The amd64
+# runner has no KVM either, and once the console is un-muted (above) the trace
+# is ~1800 kernel printfs — ~144KB of synchronous, kernel-blocking writes over a
+# 115200 emulated UART — landing squarely on the notifyd/syslogd Mach handshake
+# that #369 reports stalling under load. Run 29097309084 showed exactly that:
+# markers flowed fine, then SYSLOG-RUN-FAIL with syslogd parked in
+# mach_msg_receive. Nothing downstream needs these lines — the expect blocks
+# match markers from the on-image run.sh, and run.sh emits its own procstat -kk
+# diagnostics on failure. BOOT_TRACE=1 brings them back for root-cause runs.
+if {$env(BOOT_TRACE) eq "1"} {
+    puts "\n==> BOOT_TRACE=1: enabling mach.debug_enable + launchd_trace"
     loader_set "set mach.debug_enable=1"
     loader_set "set launchd_trace=1"
 }
@@ -1351,8 +1373,12 @@ expect {
     eof       { puts "\nOK: VM exited" }
 }
 
-close
-wait
+# A clean halt hits eof, which auto-closes the spawn — an explicit `close` then
+# throws "spawn id ... not open" and (uncaught) fails an otherwise-passing boot.
+# Harmless today under boot_soft, but a real gate breaker once amd64 hard-gates.
+# Guard both so teardown never turns a green boot red. (#369)
+catch { close }
+catch { wait }
 exit 0
 EOF
 
