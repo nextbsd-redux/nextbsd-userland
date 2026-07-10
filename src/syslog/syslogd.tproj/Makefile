@@ -54,7 +54,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 .endif
 
 LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
-	 -l:libBlocksRuntime.so
+	 -l:libsystem_blocks.so
 
 # Re-use notifyd's stub file — it covers most Apple-private link symbols
 # both daemons share (audit_token_to_*, sandbox_check_by_audit_token,

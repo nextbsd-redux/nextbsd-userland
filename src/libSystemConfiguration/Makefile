@@ -94,9 +94,9 @@ LIBDIR=		${PREFIX}/lib/system
 # -lsystem_kernel: mach_msg and the Mach port syscalls behind the MIG
 # client stubs. -llaunch: bootstrap_look_up + bootstrap_port.
 # -lsystem_dispatch: the DISPATCH_SOURCE_TYPE_MACH_RECV source behind
-# SCDynamicStoreSetDispatchQueue. -lBlocksRuntime: the dispatch source
+# SCDynamicStoreSetDispatchQueue. -lsystem_blocks: the dispatch source
 # handlers are blocks (-fblocks).
-LDADD+=		-lCoreFoundation -lsystem_dispatch -l:libBlocksRuntime.so
+LDADD+=		-lCoreFoundation -lsystem_dispatch -l:libsystem_blocks.so
 LDADD+=		-lsystem_kernel -llaunch
 # SCNetworkReachability.c calls into libdns_sd (DNSServiceQueryRecord
 # against mDNSResponder) but libdns_sd builds AFTER libSC in

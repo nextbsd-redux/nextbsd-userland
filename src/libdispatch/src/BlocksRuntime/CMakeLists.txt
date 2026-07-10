@@ -28,6 +28,17 @@ endif()
 
 add_library(BlocksRuntime::BlocksRuntime ALIAS BlocksRuntime)
 
+# nextbsd#378: ship the base Blocks runtime as libsystem_blocks.so (its
+# Apple-canonical name), NOT libBlocksRuntime.so — symmetric to the
+# libsystem_dispatch rename. Otherwise BlocksRuntime keeps colliding with
+# Gershwin's own bundled libBlocksRuntime.so even after libdispatch is renamed,
+# and Gershwin would still need a RUNPATH shadow for it. OUTPUT_NAME renames the
+# object + DT_SONAME; base consumers link -l:libsystem_blocks.so. The name is
+# NextBSD-owned; Gershwin's separate bundled BlocksRuntime is untouched.
+if(NOT APPLE AND NOT WIN32)
+  set_target_properties(BlocksRuntime PROPERTIES OUTPUT_NAME system_blocks)
+endif()
+
 install(FILES Block.h
         DESTINATION ${INSTALL_BLOCK_HEADERS_DIR})
 if(INSTALL_PRIVATE_HEADERS)

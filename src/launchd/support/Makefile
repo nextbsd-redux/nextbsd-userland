@@ -78,7 +78,7 @@ CFLAGS+=	-fconstant-cfstrings		# CFSTR() literal -> CFStringRef
 # (libicucore.so symlink would also work).
 LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
-	 -l:libBlocksRuntime.so \
+	 -l:libsystem_blocks.so \
 			# readline-compat layer for the interactive REPL
 
 BINDIR=		/bin

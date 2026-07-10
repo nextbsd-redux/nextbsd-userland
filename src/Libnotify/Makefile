@@ -92,7 +92,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 
 # Task #39 Path A: -llaunch provides bootstrap_port (Apple MIG version);
 # libxpc no longer ships those symbols.
-LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel -l:libBlocksRuntime.so
+LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel -l:libsystem_blocks.so
 
 # Install path
 LIBDIR=		/usr/lib/system

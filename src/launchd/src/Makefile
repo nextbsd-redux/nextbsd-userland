@@ -113,7 +113,7 @@ CFLAGS+=	-DAPPLE_ICU_CHANGES=1
 
 LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
-	 -l:libBlocksRuntime.so \
+	 -l:libsystem_blocks.so \
 			# floor/fmod/scalbn/ceil pulled in by CF
 
 BINDIR=		/sbin

@@ -73,13 +73,13 @@ LIBDIR=		${PREFIX}/lib/system
 # header pulls CoreFoundation too). -lxpc: the nvlist API
 # (nvlist_unpack / next / get_*) IOKitMatching.c uses to decode the
 # /dev/ioregistry IOREGIOCPROPS property bag. -lsystem_dispatch +
-# -lBlocksRuntime: the iter-4 IONotificationPortSetDispatchQueue +
+# -lsystem_blocks: the iter-4 IONotificationPortSetDispatchQueue +
 # dispatch_async_f path (the public header pulls <dispatch/dispatch.h>
 # too). -lsystem_kernel: mach_msg + the Mach port syscalls behind
 # the IONotificationPort receive loop. -lpthread: pthread_once for the
 # lazy /dev/ioregistry fd + the IONotificationPort receive thread.
 LDADD+=		-lCoreFoundation -lxpc
-LDADD+=		-lsystem_dispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_dispatch -l:libsystem_blocks.so
 LDADD+=		-lsystem_kernel -llaunch
 LDADD+=		-Wl,--allow-shlib-undefined
 LDADD+=		-Wl,-rpath,${PREFIX}/lib/system

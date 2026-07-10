@@ -193,7 +193,7 @@ CFLAGS+=	-fconstant-cfstrings
 # _LIBRARIES) -> LDADD. Our BlocksRuntime collides with FreeBSD's base
 # libblocksruntime name, so link by explicit soname (dodges releng/15.1
 # src.libnames.mk:607's LIBADD enforcement). pthread is FreeBSD base -> LIBADD.
-LDADD+=		-lsystem_dispatch -l:libBlocksRuntime.so -l_FoundationICU
+LDADD+=		-lsystem_dispatch -l:libsystem_blocks.so -l_FoundationICU
 LIBADD+=	pthread
 
 LIBDIR=		${PREFIX}/lib/system

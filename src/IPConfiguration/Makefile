@@ -72,11 +72,11 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # -lSystemConfiguration: SCDynamicStoreSetValue — the configd publish
 # that sc_publish.c wraps. -lCoreFoundation: CFDictionary / CFString
 # / CFArray, the dictionary shape sc_publish.c builds for State:/...
-# -lsystem_dispatch -lBlocksRuntime: pulled transitively by the SC umbrella
+# -lsystem_dispatch -lsystem_blocks: pulled transitively by the SC umbrella
 # header (SCDynamicStoreSetDispatchQueue ABI surface).
 LDADD+=		-llaunch -lsystem_kernel
 LDADD+=		-lSystemConfiguration -lCoreFoundation
-LDADD+=		-lsystem_dispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_dispatch -l:libsystem_blocks.so
 
 BINDIR=		/usr/sbin
 

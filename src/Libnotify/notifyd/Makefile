@@ -60,7 +60,7 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # Previously satisfied by libxpc's vendored BST copy; libxpc no longer
 # ships those symbols.
 LDADD+=		-lnotify -lsystem_asl -llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
-	 -l:libBlocksRuntime.so
+	 -l:libsystem_blocks.so
 
 BINDIR=		/usr/sbin
 
