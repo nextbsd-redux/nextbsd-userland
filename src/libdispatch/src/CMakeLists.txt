@@ -221,6 +221,13 @@ endif()
 
 if(NOT APPLE AND NOT WIN32)
   set_target_properties(dispatch PROPERTIES INSTALL_RPATH "$ORIGIN")
+  # nextbsd#378: the base NextBSD (Mach-on) libdispatch fork ships as
+  # libsystem_dispatch.so, NOT libdispatch.so, so it can never be loaded in
+  # place of Gershwin's separate stock libdispatch.so (the two-libdispatch
+  # rtld collision that crashed launchctl/dbus/sshd). OUTPUT_NAME renames both
+  # the object and DT_SONAME; base consumers link -lsystem_dispatch. The name
+  # is NextBSD-owned permanently (never re-synced with Apple), so this is clean.
+  set_target_properties(dispatch PROPERTIES OUTPUT_NAME system_dispatch)
 endif()
 
 if(LINKER_SUPPORTS_BUILD_ID)

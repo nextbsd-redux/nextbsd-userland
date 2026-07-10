@@ -55,7 +55,7 @@ LDFLAGS+=	-Wl,-rpath,/usr/lib/system
 LDFLAGS+=	-Wl,--allow-shlib-undefined
 .endif
 
-LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -ldispatch \
+LDADD+=		-lsystem_asl -lnotify -llaunch -lxpc -lsystem_dispatch \
 		-lsystem_kernel -l:libBlocksRuntime.so
 
 BINDIR=		/usr/bin

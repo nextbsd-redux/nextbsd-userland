@@ -111,7 +111,7 @@ CFLAGS+=	-D__HAS_APPLE_ICU__=1
 CFLAGS+=	-DU_DISABLE_RENAMING=1
 CFLAGS+=	-DAPPLE_ICU_CHANGES=1
 
-LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel \
+LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
 	 -l:libBlocksRuntime.so \
 			# floor/fmod/scalbn/ceil pulled in by CF

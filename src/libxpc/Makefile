@@ -83,7 +83,7 @@ LIBDIR=		${PREFIX}/lib/system
 # base libblocksruntime name, so link it by explicit soname: that dodges
 # releng/15.1 src.libnames.mk's hard error (which forces _LIBRARIES names through
 # LIBADD) while still resolving OUR lib from -L${SYSROOT}${PREFIX}/lib/system.
-LDADD+=		-lsystem_kernel -ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_kernel -lsystem_dispatch -l:libBlocksRuntime.so
 # sbuf + pthread ARE FreeBSD base libs: releng/15.1 requires they go through
 # LIBADD, not LDADD+=-lfoo (src.libnames.mk:599-607).
 LIBADD+=	sbuf pthread

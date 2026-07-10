@@ -327,16 +327,17 @@ cmake -G Ninja -S "$SRC/libdispatch" -B "$DISPATCH_BUILD" \
     -DHAVE_MACH:BOOL=ON \
     -DCMAKE_BUILD_TYPE=Release
 DESTDIR="$DESTDIR" ninja -C "$DISPATCH_BUILD" install
-# build.sh ~1014-1032: CMakeLists sets no SOVERSION, so output is unversioned
-# libdispatch.so / libBlocksRuntime.so. Create the .so.0 + Apple-canonical
-# libsystem_dispatch / libsystem_blocks symlinks (kept verbatim).
+# CMakeLists sets no SOVERSION, so the objects are unversioned. libdispatch's
+# OUTPUT_NAME is now system_dispatch (nextbsd#378), so the REAL installed file is
+# libsystem_dispatch.so — the base no longer creates libdispatch.so or
+# libdispatch.so.0 at all (that name belongs to Gershwin's separate stock
+# libdispatch). Only the .so.0 alias remains for it. Blocks is unchanged: still
+# libBlocksRuntime.so with its .so.0 + Apple-canonical libsystem_blocks aliases.
 ( cd "$DESTDIR/usr/lib/system"
-  ln -sf libdispatch.so      libdispatch.so.0
-  ln -sf libBlocksRuntime.so libBlocksRuntime.so.0
-  ln -sf libdispatch.so      libsystem_dispatch.so
-  ln -sf libdispatch.so      libsystem_dispatch.so.0
-  ln -sf libBlocksRuntime.so libsystem_blocks.so
-  ln -sf libBlocksRuntime.so libsystem_blocks.so.0 )
+  ln -sf libsystem_dispatch.so libsystem_dispatch.so.0
+  ln -sf libBlocksRuntime.so   libBlocksRuntime.so.0
+  ln -sf libBlocksRuntime.so   libsystem_blocks.so
+  ln -sf libBlocksRuntime.so   libsystem_blocks.so.0 )
 sync_sysroot
 # DROPPED: chroot ldconfig re-prime; test_libdispatch* host-exec builds.
 
@@ -791,10 +792,10 @@ TUNDEF="-Wl,--allow-shlib-undefined"
 LAUNCHINC="-I$SRC/launchd/liblaunch -I$SRC/launchd/freebsd-shims"
 
 comp "libdispatch / libxpc / CoreFoundation tests"
-$TCC -o "$TESTDIR/test_libdispatch" "$SRC/libdispatch-tests/test_libdispatch.c" -ldispatch -lpthread
-$TCC -o "$TESTDIR/test_libdispatch_mach" "$SRC/libdispatch-tests/test_libdispatch_mach.c" -ldispatch -lsystem_kernel -lpthread
-$TCC -o "$TESTDIR/test_libxpc" "$SRC/libxpc-tests/test_libxpc.c" -lxpc -llaunch -ldispatch -lsystem_kernel -lpthread
-$TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/test_corefoundation.c" -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread
+$TCC -o "$TESTDIR/test_libdispatch" "$SRC/libdispatch-tests/test_libdispatch.c" -lsystem_dispatch -lpthread
+$TCC -o "$TESTDIR/test_libdispatch_mach" "$SRC/libdispatch-tests/test_libdispatch_mach.c" -lsystem_dispatch -lsystem_kernel -lpthread
+$TCC -o "$TESTDIR/test_libxpc" "$SRC/libxpc-tests/test_libxpc.c" -lxpc -llaunch -lsystem_dispatch -lsystem_kernel -lpthread
+$TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/test_corefoundation.c" -lCoreFoundation -lsystem_dispatch -lBlocksRuntime -lsystem_kernel -lpthread
 # test_bsd_logger (SYSLOG-RUN marker): plain libc BSD syslog() round-trip; source
 # lives in tests/ (build.sh ~1076). No Darwin libs needed.
 $TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
@@ -809,7 +810,7 @@ $TCC $TUNDEF -I"$CONFIGD_MIG" -I"$SRC/configd" -o "$TESTDIR/multitest" \
 
 comp "libSystemConfiguration tests"
 SCA="-lSystemConfiguration -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
-SCB="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+SCB="-lSystemConfiguration -lCoreFoundation -lsystem_dispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
 for t in sctest scmultitest scprefstest scpathtest sclocktest scplinktest scnetiftest scnetsvctest scnetsettest scvlantest scbondtest scbridgetest; do
     $TCC -fblocks $TUNDEF -o "$TESTDIR/$t" "$SRC/libSystemConfiguration/$t.c" $SCA
 done
@@ -819,7 +820,7 @@ done
 
 comp "libIOKit tests"
 IOA="-lIOKit -lCoreFoundation -lsystem_kernel -llaunch -lpthread"
-IOB="-lIOKit -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
+IOB="-lIOKit -lCoreFoundation -lsystem_dispatch -lBlocksRuntime -lsystem_kernel -llaunch -lpthread"
 $TCC -fblocks $TUNDEF -o "$TESTDIR/iokittest"      "$SRC/libIOKit/iokittest.c"      $IOA
 $TCC -fblocks $TUNDEF -o "$TESTDIR/iokitmatchtest" "$SRC/libIOKit/iokitmatchtest.c" $IOA
 $TCC -fblocks $TUNDEF -o "$TESTDIR/iokitnotifytest" "$SRC/libIOKit/iokitnotifytest.c" $IOB
@@ -836,7 +837,7 @@ $TCC $TUNDEF -Wno-macro-redefined -I"$IPCFG_MIG" -I"$SRC/IPConfiguration" $LAUNC
     -o "$TESTDIR/ipconfigrpctest" "$SRC/IPConfiguration/ipconfigrpctest.c" "$IPCFG_MIG/ipconfigUser.c" -llaunch -lsystem_kernel
 
 comp "hostnamed tests"
-HNL="-lSystemConfiguration -lCoreFoundation -ldispatch -lBlocksRuntime -lsystem_kernel -lpthread"
+HNL="-lSystemConfiguration -lCoreFoundation -lsystem_dispatch -lBlocksRuntime -lsystem_kernel -lpthread"
 for t in hostnametest hostnameprefset hostnamedhcpset; do
     $TCC -fblocks $TUNDEF $LAUNCHINC -o "$TESTDIR/$t" "$SRC/hostnamed/$t.c" $HNL
 done

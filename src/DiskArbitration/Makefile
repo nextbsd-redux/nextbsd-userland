@@ -74,11 +74,11 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # -lpthread: libIOKit's IONotificationPort receive loop (linked transitively).
 # -lIOKit: the IONotificationPort / IOServiceAddMatchingNotification kernel-
 #   notify path (C1.3, #218). -lCoreFoundation: the CFDictionary matching-dict
-#   object model libIOKit's API consumes. -ldispatch + -lBlocksRuntime: the
+#   object model libIOKit's API consumes. -lsystem_dispatch + -lBlocksRuntime: the
 #   dispatch queue DA delivers notification callbacks on
 #   (IONotificationPortSetDispatchQueue) + the -fblocks runtime CF/dispatch pull.
 LDADD+=		-llaunch -lsystem_kernel
-LDADD+=		-lIOKit -lCoreFoundation -ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lIOKit -lCoreFoundation -lsystem_dispatch -l:libBlocksRuntime.so
 
 BINDIR=		/usr/sbin
 
