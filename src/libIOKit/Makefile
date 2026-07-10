@@ -72,14 +72,14 @@ LIBDIR=		${PREFIX}/lib/system
 # model behind the iter-2 property and matching surface (the public
 # header pulls CoreFoundation too). -lxpc: the nvlist API
 # (nvlist_unpack / next / get_*) IOKitMatching.c uses to decode the
-# /dev/ioregistry IOREGIOCPROPS property bag. -ldispatch +
-# -lBlocksRuntime: the iter-4 IONotificationPortSetDispatchQueue +
+# /dev/ioregistry IOREGIOCPROPS property bag. -lsystem_dispatch +
+# -lsystem_blocks: the iter-4 IONotificationPortSetDispatchQueue +
 # dispatch_async_f path (the public header pulls <dispatch/dispatch.h>
 # too). -lsystem_kernel: mach_msg + the Mach port syscalls behind
 # the IONotificationPort receive loop. -lpthread: pthread_once for the
 # lazy /dev/ioregistry fd + the IONotificationPort receive thread.
 LDADD+=		-lCoreFoundation -lxpc
-LDADD+=		-ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_dispatch -l:libsystem_blocks.so
 LDADD+=		-lsystem_kernel -llaunch
 LDADD+=		-Wl,--allow-shlib-undefined
 LDADD+=		-Wl,-rpath,${PREFIX}/lib/system

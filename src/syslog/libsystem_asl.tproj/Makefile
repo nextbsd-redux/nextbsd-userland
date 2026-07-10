@@ -84,7 +84,7 @@ LDFLAGS+=	-Wl,-rpath,/usr/lib/system
 LDFLAGS+=	-Wl,-z,defs
 .endif
 
-LDADD+=		-lxpc -ldispatch -lsystem_kernel -l:libBlocksRuntime.so
+LDADD+=		-lxpc -lsystem_dispatch -lsystem_kernel -l:libsystem_blocks.so
 LDADD+=			# audit_token_to_au32 from FreeBSD base
 LDADD+=		-lnotify	# notify_post / notify_register_* (asl_action.c)
 LDADD+=		-llaunch	# bootstrap_look_up2 / bootstrap_priv

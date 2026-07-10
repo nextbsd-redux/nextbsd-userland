@@ -74,7 +74,7 @@ LIBDIR=		${PREFIX}/lib/system
 
 # Link against libsystem_kernel for Mach trap shims and libdispatch
 # for queue/source primitives. Both are at /usr/lib/system/ per
-# the Phase D layout. -lBlocksRuntime resolves _Block_copy /
+# the Phase D layout. -lsystem_blocks resolves _Block_copy /
 # _NSConcreteStackBlock etc. from -fblocks; -lsbuf resolves the
 # sbuf_* API xpc_misc.c uses for xpc_copy_description. -rpath lets
 # rtld find our libsystem dir at runtime.
@@ -83,7 +83,7 @@ LIBDIR=		${PREFIX}/lib/system
 # base libblocksruntime name, so link it by explicit soname: that dodges
 # releng/15.1 src.libnames.mk's hard error (which forces _LIBRARIES names through
 # LIBADD) while still resolving OUR lib from -L${SYSROOT}${PREFIX}/lib/system.
-LDADD+=		-lsystem_kernel -ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_kernel -lsystem_dispatch -l:libsystem_blocks.so
 # sbuf + pthread ARE FreeBSD base libs: releng/15.1 requires they go through
 # LIBADD, not LDADD+=-lfoo (src.libnames.mk:599-607).
 LIBADD+=	sbuf pthread

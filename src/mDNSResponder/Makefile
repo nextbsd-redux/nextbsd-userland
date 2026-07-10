@@ -88,12 +88,12 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # -lsystem_kernel: mach_msg + the Mach port syscalls.
 # -lpthread: uds_daemon spawns request threads; mDNSPosix uses
 # pthread_mutex for the daemon-state lock.
-# -lSystemConfiguration + -lCoreFoundation + -ldispatch + -lBlocksRuntime:
+# -lSystemConfiguration + -lCoreFoundation + -lsystem_dispatch + -lsystem_blocks:
 # the SCDynamicStore subscriber in mDNSConfigStore.c uses SCDS +
 # dispatch_queue for Apple-shape network-state notifications. Issue #62.
 LDADD+=		-llaunch -lsystem_kernel
-LDADD+=		-lSystemConfiguration -lCoreFoundation -ldispatch
-LDADD+=		-l:libBlocksRuntime.so
+LDADD+=		-lSystemConfiguration -lCoreFoundation -lsystem_dispatch
+LDADD+=		-l:libsystem_blocks.so
 
 BINDIR=		/usr/sbin
 

@@ -59,8 +59,8 @@ LDFLAGS+=	-Wl,--allow-shlib-undefined
 # (Apple MIG version). notifyd calls these directly at notifyd.c:894.
 # Previously satisfied by libxpc's vendored BST copy; libxpc no longer
 # ships those symbols.
-LDADD+=		-lnotify -lsystem_asl -llaunch -lxpc -ldispatch -lsystem_kernel \
-	 -l:libBlocksRuntime.so
+LDADD+=		-lnotify -lsystem_asl -llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
+	 -l:libsystem_blocks.so
 
 BINDIR=		/usr/sbin
 

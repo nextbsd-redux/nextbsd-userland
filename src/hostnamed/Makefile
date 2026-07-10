@@ -84,7 +84,7 @@ CFLAGS+=	-I${.CURDIR}/freebsd-shim
 # -ldns_sd: libdns_sd client API — DNSServiceQueryRecord for the iter 3b
 # mDNS PTR tier. The library is built by src/mDNSResponder/libdns_sd
 # and installed to /usr/lib/system/libdns_sd.so.1 alongside dns_sd.h.
-# -ldispatch -lBlocksRuntime: transitively pulled by the SC umbrella
+# -lsystem_dispatch -lsystem_blocks: transitively pulled by the SC umbrella
 # (SCDynamicStoreSetDispatchQueue ABI surface).
 # -lsystem_kernel: kenv(2) syscall trampoline + the FreeBSD libc base
 # functions hostnamed uses (sysctl, getifaddrs, sethostname).
@@ -92,7 +92,7 @@ LDADD+=		-lsystem_kernel
 LDADD+=		-lSystemConfiguration -lCoreFoundation
 LDADD+=		-lnotify
 LDADD+=		-ldns_sd
-LDADD+=		-ldispatch -l:libBlocksRuntime.so
+LDADD+=		-lsystem_dispatch -l:libsystem_blocks.so
 
 BINDIR=		/usr/sbin
 

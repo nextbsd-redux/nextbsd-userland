@@ -76,9 +76,9 @@ CFLAGS+=	-fconstant-cfstrings		# CFSTR() literal -> CFStringRef
 # launchctl's link line. -lCoreFoundation pulls in the CF runtime.
 # -l_FoundationICU is the swift-foundation-icu unified library
 # (libicucore.so symlink would also work).
-LDADD+=		-llaunch -lxpc -ldispatch -lsystem_kernel \
+LDADD+=		-llaunch -lxpc -lsystem_dispatch -lsystem_kernel \
 		-lCoreFoundation -l_FoundationICU \
-	 -l:libBlocksRuntime.so \
+	 -l:libsystem_blocks.so \
 			# readline-compat layer for the interactive REPL
 
 BINDIR=		/bin
