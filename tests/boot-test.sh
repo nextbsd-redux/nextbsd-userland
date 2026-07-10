@@ -234,6 +234,17 @@ loader_set "set console=comconsole"
 loader_set "set boot_serial=YES"
 loader_set "set comconsole_speed=115200"
 loader_set "set boot_multicons=YES"
+# Undo the shipped console mute for CI only (nextbsd#363, nextbsd#369).
+# nextbsd-overlays' /boot/loader.conf.d/nextbsd.conf sets boot_mutemsgs="YES" so
+# a normal boot has a macOS-clean login console. That mutes the kernel console
+# for the whole boot, and the on-image test markers this script matches ride the
+# same console — so with the mute in place the expect blocks below time out on
+# markers that were in fact emitted. Clear it here, the same way and in the same
+# place we opt CI into the serial console: the shipped image stays quiet, CI
+# sees everything. `NO` (not `unset`) is deliberate — the loader's howto builder
+# does `val != NULL && strcasecmp(val, "no") != 0` (sys/kern/subr_boot.c
+# boot_env_to_howto), so `=NO` clears RB_MUTEMSGS while keeping the variable set.
+loader_set "set boot_mutemsgs=NO"
 # Verbose diagnostic trace toggles. CI-only — the shipped ISO is silent by
 # default. The kernel reads mach.debug_enable as a tunable (CTLFLAG_RWTUN) at
 # boot; launchd PID 1 and libxpc both read kenv "launchd_trace=1" once at
