@@ -86,6 +86,17 @@
 #define DISPATCH_TIMER_ASSERT(a, op, b, text) ((void)0)
 #endif
 
+/*
+ * NOTE: this runs BEFORE the backend block below, so on any platform whose
+ * <sys/event.h> lacks EV_VANISHED (i.e. everything but Darwin) THIS is the
+ * definition that wins — the `#ifndef EV_VANISHED` guard further down is
+ * therefore dead code. Change the value here, not there.
+ *
+ * On FreeBSD 0x0200 is EV_KEEPUDATA; see the EV_UDATA_SPECIFIC comment below
+ * and _dispatch_kq_unote_set_kevent(), which masks both bits off before the
+ * kevent reaches the kernel. The value only has to be unique among the flags
+ * libdispatch genuinely puts on the wire.
+ */
 #ifndef EV_VANISHED
 #define EV_VANISHED 0x0200
 #endif
@@ -200,11 +211,19 @@
  * FreeBSD has no EV_UDATA_SPECIFIC. Task #39 Path B: with
  * DISPATCH_USE_KEVENT_QOS=1, the flag value goes into
  * struct kevent_qos_s.flags (uint16_t — see libmach
- * <mach/dispatch_kevent.h>), so we must pick a 16-bit value that
- * doesn't collide with FreeBSD's defined EV_* bits (EV_ADD 0x1,
- * DELETE 0x2, ENABLE 0x4, DISABLE 0x8, ONESHOT 0x10, CLEAR 0x20,
- * RECEIPT 0x40, DISPATCH 0x80, EOF 0x8000, ERROR 0x4000). Apple's
- * canonical value is 0x0100, which fits and doesn't collide.
+ * <mach/dispatch_kevent.h>), so it must be a 16-bit value.
+ *
+ * It CANNOT be a value that doesn't collide: FreeBSD spends 0x0100 on
+ * EV_FORCEONESHOT and 0x0200 on EV_KEEPUDATA (sys/sys/event.h) — both were
+ * missing from the collision analysis this comment used to carry, which is
+ * how 0x0100 got picked as "fits and doesn't collide". It collides.
+ *
+ * The resolution is not a different value but a different contract:
+ * EV_UDATA_SPECIFIC and EV_VANISHED are libdispatch-internal markers that
+ * describe knote identity/reclaim, and _dispatch_kq_unote_set_kevent() masks
+ * both off before handing flags to kevent(2) on FreeBSD. Keeping Apple's
+ * canonical 0x0100 therefore costs nothing and keeps the source diffable
+ * against upstream. See nextbsd#369.
  *
  * Prior value here was 0x10000000 — a 28-bit constant that exceeded
  * uint16_t and tripped -Werror,-Wconstant-conversion at event/event.c
@@ -212,9 +231,11 @@
  */
 #	define EV_UDATA_SPECIFIC		0x0100
 #	define DISPATCH_EV_DIRECT		(EV_UDATA_SPECIFIC|EV_DISPATCH)
-#	ifndef EV_VANISHED
-#	define EV_VANISHED				0x00200000
-#	endif
+/*
+ * (No EV_VANISHED fallback here: the unguarded #define near the top of this
+ * header already defined it for every non-Darwin platform. A second
+ * `#ifndef EV_VANISHED` block at this point could never fire.)
+ */
 #endif
 
 #define DISPATCH_EV_MSG_NEEDS_FREE	0x10000 // mach message needs to be freed()
