@@ -25,6 +25,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <execinfo.h>	/* nextbsd#369 CI diagnostic: backtrace_symbols_fd() */
+#include <unistd.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -1309,6 +1312,53 @@ open_shared_memory(const char *name)
 	return 0;
 }
 
+/*
+ * CI diagnostic for nextbsd#369: notifyd exits with SIGSEGV after
+ * "CP13 reaching dispatch_main" on ~4 of 5 amd64 boots. The image ships no
+ * debugger, so print our own stack. launchd redirects our stderr to
+ * /var/log/notifyd.stderr, which the boot test dumps on NOTIFYD-PROC-FAIL.
+ *
+ * backtrace()/backtrace_symbols_fd() come from libexecinfo (in the base image).
+ * Neither is async-signal-safe in the strict sense — backtrace_symbols_fd()
+ * avoids malloc, which is the part that matters, and we are already dead.
+ * Runs on a sigaltstack so a stack-overflow fault can still report.
+ */
+static void
+notifyd_fatal_signal(int sig, siginfo_t *si, void *uctx)
+{
+	void *frames[64];
+	int n;
+
+	(void)uctx;
+	dprintf(STDERR_FILENO,
+	    "notifyd[%d]: FATAL signal %d, si_addr=%p, si_code=%d (nextbsd#369)\n",
+	    (int)getpid(), sig, si ? si->si_addr : NULL, si ? si->si_code : 0);
+	n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
+	backtrace_symbols_fd(frames, n, STDERR_FILENO);
+	/* Re-raise on the default handler so launchd still records the signal. */
+	signal(sig, SIG_DFL);
+	raise(sig);
+	_exit(128 + sig);
+}
+
+static void
+notifyd_install_crash_handler(void)
+{
+	static char altstack[SIGSTKSZ < 65536 ? 65536 : SIGSTKSZ];
+	stack_t ss = { .ss_sp = altstack, .ss_size = sizeof(altstack), .ss_flags = 0 };
+	struct sigaction sa;
+
+	(void)sigaltstack(&ss, NULL);
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = notifyd_fatal_signal;
+	sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+	sigemptyset(&sa.sa_mask);
+	(void)sigaction(SIGSEGV, &sa, NULL);
+	(void)sigaction(SIGBUS, &sa, NULL);
+	(void)sigaction(SIGILL, &sa, NULL);
+	(void)sigaction(SIGABRT, &sa, NULL);
+}
+
 int
 main(int argc, const char *argv[])
 {
@@ -1318,6 +1368,8 @@ main(int argc, const char *argv[])
 	uint32_t status;
 	struct rlimit rlim;
 	kern_return_t kr;
+
+	notifyd_install_crash_handler();
 
 #if TARGET_OS_SIMULATOR
 	asprintf(&_config_file_path, "%s/private/etc/notify.conf", getenv("SIMULATOR_ROOT"));

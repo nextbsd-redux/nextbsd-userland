@@ -65,5 +65,10 @@ LDADD+=		-lnotify -lsystem_asl -llaunch -lxpc -ldispatch -lsystem_kernel \
 BINDIR=		/usr/sbin
 
 # FreeBSD base libs: releng/15.1 src.libnames.mk requires LIBADD, not LDADD+=-lfoo.
-LIBADD+=	pthread bsm
+# execinfo: backtrace()/backtrace_symbols_fd() for the SIGSEGV handler in
+# notifyd.c (CI diagnostic for nextbsd#369 — the image ships no debugger).
+LIBADD+=	pthread bsm execinfo
+# -rdynamic: export notifyd's own symbols into .dynsym so backtrace_symbols_fd()
+# can name frames in the daemon itself, not just in the shared libs.
+LDFLAGS+=	-rdynamic
 .include <bsd.prog.mk>
