@@ -1,0 +1,144 @@
+/*
+ * wlan.defs — Mach-RPC interface to wland.
+ *
+ * There is no Apple original to port here. Apple's equivalent surface lives
+ * inside the closed wifid and is reached through the private Apple80211
+ * framework; the only piece Apple ever published (eap8021x / eapolclient) does
+ * the EAP exchange and nothing else. So this IDL is ours, and it is shaped to
+ * the two hard constraints this port's kernel imposes:
+ *
+ *   1. MIG OUT-OF-LINE DATA IS BROKEN in this kernel. ipconfig.defs:19-22 says
+ *      so explicitly, and it is why ipconfigd vendors only 2 of Apple's ~21
+ *      routines (Apple's ipconfig_set takes an OOL xmlData). wland therefore
+ *      CANNOT return a scan-results plist over MIG. Instead it uses the flat
+ *      indexed pattern ipconfigd already established:
+ *          wlan_scan_count()  then  wlan_scan_entry(i)
+ *      Every argument below is a fixed-size array or a scalar.
+ *
+ *   2. Scan results cannot go in the dynamic store either. CONFIG_DATA_MAX
+ *      (config_types.h:74) rejects any key OR value over 8192 bytes, and a busy
+ *      scan blows straight past that. Only the compact connected-state summary
+ *      belongs in State:/.../AirPort; the scan list goes over this MIG surface.
+ *
+ * Subsystem base 30000: configd and ipconfigd both sit at 20000 (Apple ships
+ * them that way and they never share a port set, so their id ranges collide
+ * harmlessly). wland has no Apple original whose ids we need to match, so it
+ * takes a range of its own rather than adding a third collision.
+ *
+ * The server demux _wlan_server() runs inside wland's mach_service_thread
+ * receive loop. Per-routine implementations are in wland_mig.c.
+ */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+subsystem wlan 30000;
+serverprefix _;
+
+import "wlan_mig_types.h";
+
+type wlan_ifname	= array[16] of char ctype: WLANInterfaceName;
+type wlan_ssid		= array[33] of char ctype: WLANSSID;
+type wlan_bssid		= array[18] of char ctype: WLANBSSID;
+type wlan_psk		= array[65] of char ctype: WLANPassphrase;
+type wlan_state		= MACH_MSG_TYPE_INTEGER_32 ctype: wlan_state_t;
+type wlan_security	= MACH_MSG_TYPE_INTEGER_32 ctype: wlan_security_t;
+type wlan_status_code	= MACH_MSG_TYPE_INTEGER_32 ctype: wlan_status_t;
+
+/*
+ * wlan_if_count / wlan_if_name — enumerate the WLAN interfaces wland owns.
+ * These are the VAPs wland itself cloned, so the answer is authoritative in a
+ * way getifaddrs is not (it cannot tell wlan0 from em0 by media type: net80211
+ * VAPs go through ether_ifattach and report IFT_ETHER).
+ */
+routine wlan_if_count(
+	server		: mach_port_t;
+	out count	: int
+);
+
+routine wlan_if_name(
+	server		: mach_port_t;
+	index		: int;
+	out name	: wlan_ifname;
+	out status	: wlan_status_code
+);
+
+/*
+ * wlan_scan — ask wpa_supplicant to scan on `name`. Returns as soon as the
+ * scan is REQUESTED, not when it completes; results land asynchronously and the
+ * caller polls wlan_scan_count. A blocking scan RPC would hold a Mach reply
+ * port open for the several seconds a full-band sweep takes.
+ */
+routine wlan_scan(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	out status	: wlan_status_code
+);
+
+/* How many results are in wland's cache for `name` right now. */
+routine wlan_scan_count(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	out count	: int;
+	out status	: wlan_status_code
+);
+
+/*
+ * One scan result, by index. The flat-scalar shape is forced by the broken-OOL
+ * constraint above — this is the same shape as ipconfig_if_count/if_addr, for
+ * the same reason.
+ */
+routine wlan_scan_entry(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	index		: int;
+	out ssid	: wlan_ssid;
+	out bssid	: wlan_bssid;
+	out rssi	: int;
+	out channel	: int;
+	out security	: wlan_security;
+	out status	: wlan_status_code
+);
+
+/*
+ * wlan_connect — associate `name` with `ssid`, using `psk` (empty for an open
+ * network). wland becomes the sole author of wpa_supplicant's network block for
+ * this SSID and records it in SCPreferences as a known network.
+ *
+ * Like wlan_scan this returns once the association has been REQUESTED. The
+ * caller watches State:/Network/Interface/<name>/AirPort (or polls
+ * wlan_status) for the outcome — because the 4-way handshake takes time, and
+ * because that key is the thing ipconfigd's DHCP gate keys on anyway.
+ */
+routine wlan_connect(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	ssid		: wlan_ssid;
+	psk		: wlan_psk;
+	out status	: wlan_status_code
+);
+
+/* Disassociate, and stop autojoining this network until asked again. */
+routine wlan_disconnect(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	out status	: wlan_status_code
+);
+
+/*
+ * wlan_status — the compact connected-state summary. Same information wland
+ * publishes into State:/.../AirPort; offered here too so the CLI does not need
+ * to link SystemConfiguration (and because there is no scutil in this port —
+ * there is NO way to inspect the dynamic store ad hoc).
+ */
+routine wlan_status(
+	server		: mach_port_t;
+	name		: wlan_ifname;
+	out state	: wlan_state;
+	out ssid	: wlan_ssid;
+	out bssid	: wlan_bssid;
+	out rssi	: int;
+	out channel	: int;
+	out security	: wlan_security;
+	out status	: wlan_status_code
+);
