@@ -9,10 +9,28 @@
  * redundant, so the route->Link translation moves in-process here, retiring the
  * standalone daemon + its launchd plist.
  *
- * Job (unchanged from the daemon): read the PF_ROUTE socket for RTM_IFINFO
- * link-state changes and publish Apple's canonical key
+ * Job: read the PF_ROUTE socket and publish Apple's canonical key
  *   State:/Network/Interface/<ifname>/Link = { Active : <bool> }
  * so ipconfigd (sc_link_watch) starts DHCP when a NIC links up.
+ *
+ * Two route message types matter (#42):
+ *
+ *   RTM_IFINFO      — an existing interface's link state changed. Republish
+ *                     its Link key.
+ *   RTM_IFANNOUNCE  — an interface arrived or departed. This used to be
+ *                     ignored entirely, and both halves of that were bugs:
+ *
+ *                     * An interface created at RUNTIME was invisible until it
+ *                       happened to generate its first link-state transition.
+ *                       It had no Link key at all, so nothing could watch for
+ *                       it. That is exactly the shape of a net80211 VAP —
+ *                       `ifconfig wlan0 create wlandev iwlwifi0` — which is why
+ *                       wland would otherwise have to run its own duplicate
+ *                       PF_ROUTE listener just to see the interfaces it creates
+ *                       itself.
+ *                     * A DESTROYED interface left its Link key in the store
+ *                       forever, so consumers kept seeing a dead wlan0 as a
+ *                       live, Active interface. Departures now remove the key.
  *
  * Mechanism: a dedicated thread inside configd. Rather than reach into the
  * store directly (which would need a lock around config_store / config_session,
@@ -57,6 +75,8 @@ extern kern_return_t configopen(mach_port_t, xmlData, mach_msg_type_number_t,
     xmlData, mach_msg_type_number_t, mach_port_t *, int *);
 extern kern_return_t configset(mach_port_t, xmlData, mach_msg_type_number_t,
     xmlData, mach_msg_type_number_t, int, int *, int *);
+extern kern_return_t configremove(mach_port_t, xmlData, mach_msg_type_number_t,
+    int *);
 
 /* liblaunch global — the bootstrap port configd checked its service in on. */
 extern mach_port_t bootstrap_port;
@@ -156,6 +176,78 @@ publish_link(const char *ifname, int active)
 }
 
 /*
+ * Remove State:/Network/Interface/<ifname>/Link (#42).
+ *
+ * An interface that goes away must not leave a Link key behind. Before this,
+ * destroying a VAP (`ifconfig wlan0 destroy`) left `wlan0` in the store
+ * looking permanently Active, and every consumer — ipconfigd's link watch
+ * included — kept believing in an interface that no longer existed.
+ */
+static void
+unpublish_link(const char *ifname)
+{
+	char		key[128];
+	int		keylen, status = 0;
+	kern_return_t	kr;
+
+	if (strcmp(ifname, "lo0") == 0)
+		return;
+	if (g_session == MACH_PORT_NULL)
+		return;
+
+	keylen = snprintf(key, sizeof(key),
+	    "State:/Network/Interface/%s/Link", ifname);
+	if (keylen <= 0 || (size_t)keylen >= sizeof(key))
+		return;
+
+	kr = configremove(g_session, (uint8_t *)key,
+	    (mach_msg_type_number_t)keylen, &status);
+	/*
+	 * kSCStatusNoKey is the expected outcome for an interface that never
+	 * had a Link key (it departed before we ever saw it link), so it is not
+	 * worth logging as a failure.
+	 */
+	if (kr != KERN_SUCCESS) {
+		lmlog("KEM-LINK-FAIL: configremove(%s) kr=0x%x status=%d",
+		    ifname, (unsigned)kr, status);
+		return;
+	}
+	lmlog("KEM-LINK-GONE: %s", ifname);
+}
+
+/*
+ * Publish one interface's *current* link state, looked up via getifaddrs.
+ *
+ * Needed for RTM_IFANNOUNCE / IFAN_ARRIVAL: unlike RTM_IFINFO, an announce
+ * message carries no `struct if_data`, so there is no link state in the message
+ * itself — it only tells us the interface now exists. We go and read it.
+ */
+static void
+publish_link_current(const char *ifname)
+{
+	struct ifaddrs *ifa, *p;
+
+	if (getifaddrs(&ifa) != 0) {
+		lmlog("getifaddrs failed: %s", strerror(errno));
+		return;
+	}
+	for (p = ifa; p != NULL; p = p->ifa_next) {
+		const struct if_data *ifd;
+
+		if (p->ifa_addr == NULL ||
+		    p->ifa_addr->sa_family != AF_LINK ||
+		    p->ifa_data == NULL ||
+		    strcmp(p->ifa_name, ifname) != 0)
+			continue;
+		ifd = (const struct if_data *)p->ifa_data;
+		publish_link(ifname,
+		    link_active(ifd->ifi_link_state, (int)p->ifa_flags));
+		break;
+	}
+	freeifaddrs(ifa);
+}
+
+/*
  * Publish the current link state of every interface (startup snapshot, so a
  * watcher already up before any RTM_IFINFO still sees the state). The AF_LINK
  * ifaddr's ifa_data is a `struct if_data *` carrying ifi_link_state.
@@ -241,11 +333,12 @@ monitor_thread(void *arg)
 	publish_all();
 
 	for (;;) {
-		char			buf[2048];
-		struct rt_msghdr	*rtm;
-		struct if_msghdr	*ifm;
-		char			ifname[IFNAMSIZ];
-		ssize_t			n;
+		char				buf[2048];
+		struct rt_msghdr		*rtm;
+		struct if_msghdr		*ifm;
+		struct if_announcemsghdr	*ifan;
+		char				ifname[IFNAMSIZ];
+		ssize_t				n;
 
 		n = read(rs, buf, sizeof(buf));
 		if (n <= 0) {
@@ -260,7 +353,38 @@ monitor_thread(void *arg)
 		rtm = (struct rt_msghdr *)(void *)buf;
 		if (rtm->rtm_version != RTM_VERSION)
 			continue;
+
+		/*
+		 * Interface arrived or departed (#42). This is how a VAP cloned
+		 * at runtime — `ifconfig wlan0 create wlandev iwlwifi0` — first
+		 * becomes visible in the store, and how a destroyed one stops
+		 * being visible. Note an announce carries no if_data, so on
+		 * arrival we go read the interface's real link state.
+		 */
+		if (rtm->rtm_type == RTM_IFANNOUNCE) {
+			if ((size_t)n < sizeof(struct if_announcemsghdr))
+				continue;
+			ifan = (struct if_announcemsghdr *)(void *)buf;
+			(void)strlcpy(ifname, ifan->ifan_name, sizeof(ifname));
+
+			switch (ifan->ifan_what) {
+			case IFAN_ARRIVAL:
+				lmlog("KEM-IFAN: %s arrived", ifname);
+				publish_link_current(ifname);
+				break;
+			case IFAN_DEPARTURE:
+				lmlog("KEM-IFAN: %s departed", ifname);
+				unpublish_link(ifname);
+				break;
+			default:
+				break;
+			}
+			continue;
+		}
+
 		if (rtm->rtm_type != RTM_IFINFO)
+			continue;
+		if ((size_t)n < sizeof(struct if_msghdr))
 			continue;
 		ifm = (struct if_msghdr *)(void *)buf;
 		if (if_indextoname(ifm->ifm_index, ifname) == NULL)
@@ -284,6 +408,6 @@ config_link_monitor_start(void)
 		return;
 	}
 	(void)pthread_detach(th);
-	lmlog("link monitor started (PF_ROUTE -> "
+	lmlog("link monitor started (PF_ROUTE RTM_IFINFO + RTM_IFANNOUNCE -> "
 	    "State:/Network/Interface/<if>/Link, in-process)");
 }
