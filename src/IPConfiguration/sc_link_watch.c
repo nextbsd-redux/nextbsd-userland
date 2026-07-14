@@ -1,12 +1,47 @@
 /*
- * sc_link_watch.c — ipconfigd SCDynamicStore link-state watcher.
+ * sc_link_watch.c — ipconfigd SCDynamicStore interface-state watcher.
  *
- * Watches State:/Network/Interface/<if>/Link (published by the
- * KernelEventMonitor daemon from PF_ROUTE link-state changes). When an
- * interface's Link dict turns { Active : true }, schedule the caller's
- * callback to start DHCP on it. This is the Apple-shaped trigger
- * (KernelEventMonitor -> SCDynamicStore -> IPConfiguration) that
- * replaces ipconfigd's removed hwregd attach subscription.
+ * Watches State:/Network/Interface/<if>/Link (published by configd's
+ * KernelEventMonitor from PF_ROUTE link-state changes) and, since the
+ * WLAN work, State:/Network/Interface/<if>/AirPort (published by wland).
+ * DHCP starts only when BOTH say go.
+ *
+ * ---------------------------------------------------------------------
+ * The DHCP gate (WLAN plan §1.4)
+ *
+ * ipconfigd's contract used to be "Link{Active} means L2 is usable for
+ * IP". For Ethernet that is true. For 802.11 it is a lie, and the lie is
+ * expensive:
+ *
+ *   net80211 reaches RUN state as soon as the station has ASSOCIATED —
+ *   which is BEFORE the WPA 4-way handshake. The interface reports
+ *   LINK_STATE_UP at that instant, KernelEventMonitor publishes
+ *   Link{Active:true}, and ipconfigd fires DHCPDISCOVER onto a port that
+ *   is not yet keyed. Every packet is dropped. The {4,8,16}s retransmit
+ *   ladder burns ~28 seconds and gives up — and because Link is ALREADY
+ *   Active, no new link event ever arrives, so nothing retries. Silence,
+ *   forever.
+ *
+ * The repair is a second predicate: require Link{Active} AND
+ * AirPort{Authenticated}. wland publishes AirPort{Authenticated:false}
+ * on association and {Authenticated:true} on CTRL-EVENT-CONNECTED.
+ *
+ * KEY-ABSENT-MEANS-READY IS THE LOAD-BEARING DEFAULT. No WLAN daemon has
+ * claimed em0, so em0 has no AirPort key, so wlan_ready() returns 1 and
+ * the wired path behaves bit-for-bit as it always has. That matters more
+ * than it sounds: tests/boot-test.sh gates the whole CI on em0 getting a
+ * lease, and this gate must be invisible to it.
+ *
+ * The re-trigger falls out for free. wland's second configset (false ->
+ * true) is itself a change on the AirPort pattern, so configd wakes this
+ * same session, evaluate_interface() re-runs, /Link is still Active, the
+ * gate is now open, and DHCP starts. Event-driven; no polling, no
+ * debounce, no new IPC, no configd change, no MIG regeneration.
+ *
+ * It also incidentally fixes the "one failed attempt then silence" hole
+ * for WLAN: a re-association generates a fresh AirPort transition and
+ * therefore a fresh trigger, even though /Link never moved.
+ * ---------------------------------------------------------------------
  *
  * Threading: the SC change callout runs on a dedicated serial delivery
  * queue (under SCDynamicStoreSetDispatchQueue). To keep that queue
@@ -15,8 +50,7 @@
  * in the DHCP + lease loop. The same scheduling path serves the
  * one-shot initial scan, so a link already Active before we subscribed
  * still fires. Concurrent/duplicate fires are the callback's problem
- * to dedupe (ipconfigd guards on bound-state + a dhcp-in-progress
- * flag).
+ * to dedupe (ipconfigd guards per-interface on its worker table).
  *
  * Single CF translation unit, like sc_publish.c — the rest of the
  * daemon stays plain C.
@@ -37,9 +71,18 @@
 static sc_link_watch_cb	g_cb;
 static uint32_t		g_lease_cap_secs;
 
-/* The watch pattern: every interface's Link entity. POSIX ERE — configd
- * anchors it ^...$. [^/]+ matches one path component (the ifname). */
+/*
+ * The watch patterns: every interface's Link entity, and every interface's
+ * AirPort entity. POSIX ERE — configd anchors them ^...$. [^/]+ matches one
+ * path component (the ifname).
+ *
+ * Watching AirPort as a *pattern* rather than a fixed key is what makes the
+ * gate work for a VAP that does not exist yet: wland clones wlan0 at runtime,
+ * and its first AirPort publish matches the pattern and wakes us with no
+ * re-subscription.
+ */
 #define LINK_PATTERN	"State:/Network/Interface/[^/]+/Link"
+#define AIRPORT_PATTERN	"State:/Network/Interface/[^/]+/AirPort"
 
 static void
 xlog(const char *fmt, ...)
@@ -137,25 +180,132 @@ schedule_link_event(const char *ifname, int active)
 }
 
 /*
- * Pull "State:/Network/Interface/<if>/Link"'s Active flag out of the store
- * and schedule the caller's callback for <if>, passing the link state.
- * Fired for BOTH up and down so the callback can admin-up a newly-seen
- * interface whose link is still down (the late-arriving-NIC case, #219) and
- * DHCP it once it links. Extracts the ifname from the key text rather than the
- * dict, so it works for both the change callout and the initial scan. lo0 is
- * filtered here so the callback never sees loopback.
+ * Read a boolean out of State:/Network/Interface/<ifname>/<entity>.
+ *
+ * Returns 1 / 0 for a present boolean, and `dflt` when the entity key or the
+ * field is absent (or is not a boolean). The default is the whole point — see
+ * wlan_ready().
+ */
+static int
+iface_entity_bool(SCDynamicStoreRef store, const char *ifname,
+    const char *entity, const char *field, int dflt)
+{
+	CFStringRef key, cf_field;
+	CFDictionaryRef dict;
+	CFBooleanRef val;
+	int result = dflt;
+
+	key = CFStringCreateWithFormat(NULL, NULL,
+	    CFSTR("State:/Network/Interface/%s/%s"), ifname, entity);
+	if (key == NULL)
+		return (dflt);
+	dict = SCDynamicStoreCopyValue(store, key);
+	CFRelease(key);
+	if (dict == NULL)
+		return (dflt);			/* entity absent */
+	if (CFGetTypeID(dict) != CFDictionaryGetTypeID()) {
+		CFRelease(dict);
+		return (dflt);
+	}
+	cf_field = CFStringCreateWithCString(NULL, field, kCFStringEncodingUTF8);
+	if (cf_field != NULL) {
+		val = CFDictionaryGetValue(dict, cf_field);
+		if (val != NULL && CFGetTypeID(val) == CFBooleanGetTypeID())
+			result = CFBooleanGetValue(val) ? 1 : 0;
+		CFRelease(cf_field);
+	}
+	CFRelease(dict);
+	return (result);
+}
+
+/*
+ * Is `ifname` cleared for IP traffic as far as 802.11 is concerned?
+ *
+ * Reads State:/Network/Interface/<if>/AirPort {Authenticated}, which wland
+ * publishes: false on association (net80211 RUN, but not yet keyed) and true
+ * on CTRL-EVENT-CONNECTED (4-way handshake complete).
+ *
+ * KEY ABSENT => 1. This is deliberate and load-bearing. An interface no WLAN
+ * daemon has claimed — em0, or any wired NIC — has no AirPort key at all, so it
+ * is unconditionally ready and the wired path is completely unchanged. Getting
+ * this backwards would deadlock DHCP on every Ethernet machine in existence,
+ * and tests/boot-test.sh would be the first casualty.
+ */
+static int
+wlan_ready(SCDynamicStoreRef store, const char *ifname)
+{
+	return (iface_entity_bool(store, ifname, "AirPort", "Authenticated", 1));
+}
+
+/*
+ * Decide whether `ifname` should be DHCP'd, admin-upped, or left alone, and
+ * schedule the caller's callback accordingly.
+ *
+ * This is called for a change to EITHER of the interface's watched entities
+ * (/Link or /AirPort), and it re-reads both from the store rather than trusting
+ * whichever key happened to wake us — so the two predicates can arrive in
+ * either order, any number of times, and the answer is always the current
+ * truth.
+ *
+ * The gate: DHCP requires Link{Active} AND wlan_ready(). The admin-up path
+ * (link down) is untouched by the gate — a WLAN VAP still needs IFF_UP before
+ * it can associate at all, and gating that on association would be circular.
  */
 static void
-handle_link_key(SCDynamicStoreRef store, CFStringRef key)
+evaluate_interface(SCDynamicStoreRef store, const char *ifname)
+{
+	int link_up, ready;
+
+	/*
+	 * Link absent entirely: nothing to do. This happens when an AirPort key
+	 * shows up for a VAP whose Link key configd has not published yet.
+	 * There is no race to lose — the Link key's own arrival will call us
+	 * straight back.
+	 */
+	if (iface_entity_bool(store, ifname, "Link", "Active", -1) == -1)
+		return;
+
+	link_up = iface_entity_bool(store, ifname, "Link", "Active", 0);
+	if (!link_up) {
+		xlog("IPCFG-LINK-SEEN: %s present, link down — scheduling "
+		    "admin-up", ifname);
+		schedule_link_event(ifname, 0);
+		return;
+	}
+
+	ready = wlan_ready(store, ifname);
+	if (!ready) {
+		/*
+		 * Associated but not yet keyed. Do NOT fire DHCP — this is the
+		 * exact instant net80211 hits RUN and the old code blasted a
+		 * DHCPDISCOVER into an unauthenticated port. wland's
+		 * Authenticated:true will wake us again.
+		 */
+		xlog("IPCFG-LINK-GATED: %s link Active but AirPort not "
+		    "Authenticated — holding DHCP until the 4-way handshake "
+		    "completes", ifname);
+		return;
+	}
+
+	xlog("IPCFG-LINK-UP: %s link Active — scheduling DHCP", ifname);
+	schedule_link_event(ifname, 1);
+}
+
+/*
+ * Extract the interface name from a State:/Network/Interface/<if>/<entity> key
+ * and hand off to evaluate_interface(). The parse is entity-agnostic — it reads
+ * the path component after the prefix — so one function serves the /Link
+ * pattern, the /AirPort pattern, the change callout, and the initial scan.
+ * lo0 is filtered here so the callback never sees loopback.
+ */
+static void
+handle_iface_key(SCDynamicStoreRef store, CFStringRef key)
 {
 	char keybuf[128];
 	char ifname[IFNAMSIZ];
 	const char *prefix = "State:/Network/Interface/";
 	const char *p, *slash;
 	size_t n;
-	CFDictionaryRef dict;
-	CFBooleanRef active;
-	int is_active;
 
 	if (!CFStringGetCString(key, keybuf, sizeof(keybuf),
 	    kCFStringEncodingUTF8))
@@ -175,24 +325,7 @@ handle_link_key(SCDynamicStoreRef store, CFStringRef key)
 	if (strncmp(ifname, "lo", 2) == 0)	/* loopback never DHCPs */
 		return;
 
-	dict = SCDynamicStoreCopyValue(store, key);
-	if (dict == NULL)
-		return;
-	if (CFGetTypeID(dict) != CFDictionaryGetTypeID()) {
-		CFRelease(dict);
-		return;
-	}
-	active = CFDictionaryGetValue(dict, CFSTR("Active"));
-	is_active = (active != NULL &&
-	    CFGetTypeID(active) == CFBooleanGetTypeID() &&
-	    CFBooleanGetValue(active));
-	if (is_active)
-		xlog("IPCFG-LINK-UP: %s link Active — scheduling DHCP", ifname);
-	else
-		xlog("IPCFG-LINK-SEEN: %s present, link down — scheduling "
-		    "admin-up", ifname);
-	schedule_link_event(ifname, is_active);
-	CFRelease(dict);
+	evaluate_interface(store, ifname);
 }
 
 /* SCDynamicStore change callout — one or more watched keys changed. */
@@ -204,7 +337,7 @@ link_changed(SCDynamicStoreRef store, CFArrayRef changedKeys, void *info)
 	(void)info;
 	count = CFArrayGetCount(changedKeys);
 	for (i = 0; i < count; i++)
-		handle_link_key(store, CFArrayGetValueAtIndex(changedKeys, i));
+		handle_iface_key(store, CFArrayGetValueAtIndex(changedKeys, i));
 }
 
 int
@@ -213,9 +346,9 @@ sc_link_watch_start(sc_link_watch_cb cb, uint32_t lease_cap_secs)
 	SCDynamicStoreContext ctx;
 	SCDynamicStoreRef store;
 	dispatch_queue_t queue;
-	CFStringRef name, pattern;
+	CFStringRef name, link_pat, air_pat;
 	CFArrayRef patterns, existing;
-	const void *pvals[1];
+	const void *pvals[2];
 
 	g_cb = cb;
 	g_lease_cap_secs = lease_cap_secs;
@@ -248,14 +381,23 @@ sc_link_watch_start(sc_link_watch_cb cb, uint32_t lease_cap_secs)
 		return (-1);
 	}
 
-	pattern = mkstr(LINK_PATTERN);
-	pvals[0] = pattern;
-	patterns = CFArrayCreate(NULL, pvals, 1, &kCFTypeArrayCallBacks);
+	/*
+	 * Subscribe to BOTH entities. A change to either one re-runs
+	 * evaluate_interface(), which re-reads both — so Link and AirPort can
+	 * arrive in any order, any number of times, and the gate always sees
+	 * current truth.
+	 */
+	link_pat = mkstr(LINK_PATTERN);
+	air_pat = mkstr(AIRPORT_PATTERN);
+	pvals[0] = link_pat;
+	pvals[1] = air_pat;
+	patterns = CFArrayCreate(NULL, pvals, 2, &kCFTypeArrayCallBacks);
 	if (!SCDynamicStoreSetNotificationKeys(store, NULL, patterns)) {
 		xlog("IPCFG-LINK-FAIL: SetNotificationKeys: %s",
 		    SCErrorString(SCError()));
 		CFRelease(patterns);
-		CFRelease(pattern);
+		CFRelease(link_pat);
+		CFRelease(air_pat);
 		CFRelease(store);
 		return (-1);
 	}
@@ -266,31 +408,41 @@ sc_link_watch_start(sc_link_watch_cb cb, uint32_t lease_cap_secs)
 		    SCErrorString(SCError()));
 		dispatch_release(queue);
 		CFRelease(patterns);
-		CFRelease(pattern);
+		CFRelease(link_pat);
+		CFRelease(air_pat);
 		CFRelease(store);
 		return (-1);
 	}
-	xlog("IPCFG-LINK-WATCH-OK: watching %s", LINK_PATTERN);
+	xlog("IPCFG-LINK-WATCH-OK: watching %s and %s (DHCP requires "
+	    "Link{Active} AND AirPort{Authenticated}; AirPort absent means "
+	    "ready, so wired NICs are unaffected)",
+	    LINK_PATTERN, AIRPORT_PATTERN);
 
 	/*
 	 * Initial scan: a link that was already Active before the watch
 	 * registered won't generate a change event, so sweep matching keys
-	 * once and fire for any that are already up. KernelEventMonitor's
-	 * own startup snapshot makes this the common path in CI (SLIRP
-	 * link is up immediately).
+	 * once and evaluate any interface we find. KernelEventMonitor's own
+	 * startup snapshot makes this the common path in CI (SLIRP link is up
+	 * immediately).
+	 *
+	 * Only the Link pattern is swept. An AirPort key cannot exist without a
+	 * Link key for the same interface (the VAP has to attach before wland
+	 * can publish anything about it), so sweeping Link alone reaches every
+	 * interface — and evaluate_interface() reads the AirPort side anyway.
 	 */
-	existing = SCDynamicStoreCopyKeyList(store, pattern);
+	existing = SCDynamicStoreCopyKeyList(store, link_pat);
 	if (existing != NULL) {
 		CFIndex i, count = CFArrayGetCount(existing);
 
 		for (i = 0; i < count; i++)
-			handle_link_key(store,
+			handle_iface_key(store,
 			    CFArrayGetValueAtIndex(existing, i));
 		CFRelease(existing);
 	}
 
 	CFRelease(patterns);
-	CFRelease(pattern);
+	CFRelease(link_pat);
+	CFRelease(air_pat);
 	/*
 	 * Intentionally leak `store` + `queue` for the daemon's lifetime —
 	 * the watch must stay live until exit; there is no stop path.
