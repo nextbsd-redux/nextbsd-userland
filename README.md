@@ -133,6 +133,108 @@ is loader-only in practice.
 Related harness env vars: `BOOT_GATE=full` runs the on-image Mach/launchd/configd
 suite; `BOOT_GATE=login` stops at the `login:` prompt.
 
+## WLAN (802.11)
+
+Wireless is owned by **`wland`** (`/usr/sbin/wland`, launchd job
+`org.nextbsd.wland`, Mach service `org.nextbsd.wlan`) and driven by the
+**`wlan`** CLI. Full detail: `man wland`, `man wlan`, and the
+[WLAN plan](https://pkgdemon.github.io/nextbsd-wlan-plan.html).
+
+```sh
+wlan list                          # WLAN interfaces wland owns
+wlan scan                          # SSID / BSSID / signal / channel / security
+wlan connect <ssid> [passphrase]   # join, and remember it
+wlan status                        # current association
+wlan disconnect
+```
+
+```
+$ wlan scan
+SSID                             BSSID              SIGNAL   CH SECURITY
+Home                             a4:2b:b0:11:22:33  ****  -42   6 WPA2
+Cafe                             de:ad:be:ef:00:01  **    -71  36 open
+
+$ wlan connect Home hunter2hunter2
+associating with 'Home' on wlan0...
+
+$ wlan status
+interface: wlan0
+state:     connected
+ssid:      Home
+signal:    -42 dBm
+channel:   6
+security:  WPA2
+```
+
+### The one thing to understand: `associated` is not `connected`
+
+802.11 has two moments that look alike and are not. **`associated`** means the
+station joined the BSS and net80211 reached RUN state — but **the port is not
+yet keyed**. The interface reports its link UP at that instant, which is exactly
+why a naive DHCP client fires a DHCPDISCOVER there and has every packet silently
+dropped. **`connected`** means the WPA 4-way handshake completed and traffic can
+actually flow.
+
+NextBSD does not guess. `wland` publishes
+`State:/Network/Interface/<if>/AirPort` with an `Authenticated` flag that is true
+only when *connected*, and `ipconfigd` **holds DHCP until it sees it**:
+
+```
+DHCP requires:  Link{Active}  AND  AirPort{Authenticated}
+```
+
+So if `wlan status` says `associated` and you have no IP, that is the system
+working **correctly**. If it stays there, authentication is failing — nearly
+always a wrong passphrase.
+
+**Key-absent-means-ready** is the load-bearing default: an interface with no
+`AirPort` key (i.e. every wired NIC) is unconditionally ready, so `em0` behaves
+bit-for-bit as it always has. Inverting that default would deadlock DHCP on
+every Ethernet machine in existence.
+
+### Design points that are easy to get wrong
+
+- **`wpa_supplicant` is stock, from FreeBSD base.** Not vendored, not patched,
+  not taught Mach, and *not* the `security/wpa_supplicant` port (same 2.11; it
+  merely shadows base). It speaks net80211 ioctls downward and a UNIX control
+  socket upward and does not know configd exists — all Mach knowledge lives in
+  `wland`. A CVE is therefore a base rebuild, not a merge against local patches
+  forever.
+- **`wland` is the sole author of `wpa_supplicant`'s network blocks.** It spawns
+  the supplicant with an **empty** config (`update_config=0`) and injects every
+  network at runtime. Putting SSIDs in that config file creates a *second*
+  autojoin brain competing with `wland`'s — the classic NetworkManager failure
+  mode. Don't.
+- **`wland` creates the VAP.** On FreeBSD that is `rc.conf`'s job
+  (`wlans_iwlwifi0="wlan0"`); NextBSD has no `rc.conf` and no `/etc/rc.d`, so it
+  had no owner at all. `wland` does it natively via `SIOCIFCREATE2`, with a
+  wildcard name so the kernel picks the unit.
+- **Passphrases are plaintext**, in a root-owned `preferences.plist` (0600).
+  Unavoidable: there is no keychain, so they are plaintext on disk either way —
+  the only real choice is *which* file.
+- **Scan results do not go in the dynamic store.** `CONFIG_DATA_MAX` caps any
+  value at 8 KiB and a busy scan blows past it, and MIG out-of-line data is
+  broken in this kernel — hence the flat `wlan_scan_count()` +
+  `wlan_scan_entry(i)` RPC pattern.
+- **amd64 only.** arm64 `GENERIC` never sets `device wlan`, so net80211 is
+  absent from that kernel entirely.
+
+### Debugging
+
+There is **no `scutil`** in this port, so `wlan` *is* the introspection tool.
+
+```sh
+launchctl list | grep wland      # is it running?
+tail -f /var/log/wland.stderr    # what is it doing?
+sysctl net.wlan.devices          # did the driver attach at all?
+ifconfig wlan0                   # did the VAP get cloned?
+```
+
+Log markers worth grepping: `WLAN-IF-OK` (VAP up), `WLAN-RPC-OK` (Mach service
+checked in), `WLAN-AIRPORT-OK` (the association-complete signal reached the
+store — the thing ipconfigd's gate waits on), and on the ipconfigd side
+`IPCFG-LINK-GATED` (DHCP deliberately held) vs `IPCFG-LINK-UP` (gate open).
+
 ## Manpages
 
 Every shipped binary and library that has a man page installs it into
@@ -165,10 +267,16 @@ above; `/System/Library` and `~/Library` paths are kept as-is.
 | mDNSResponder | `man mDNSResponder` (8) | multicast DNS / DNS-SD responder |
 | libdispatch | `man dispatch` (3) | Grand Central Dispatch API (plus the `dispatch_*` pages) |
 | cpdup | `man cpdup` (1) | filesystem copy / mirror utility |
+| WLAN | `man wlan` (8) | WLAN command-line client |
+| WLAN | `man wland` (8) | 802.11 management daemon |
 
 **Shipped binaries with no man page** (deliberately none — not fabricated):
 `ipconfigd` (upstream ships only `ipconfig.8` for the client CLI, which NextBSD
 does not build — there is no daemon page), and `hostnamed` / `kextdeps`
-(NextBSD-original, no upstream page). `mig` / `migcom` ship man pages upstream
+(NextBSD-original, no upstream page). `wland` / `wlan` are also
+NextBSD-originals with no upstream page — but unlike those, they ship
+*original* pages written for them, because `wlan` is a CLI users actually type
+and there is no `scutil` to fall back on. Writing our own page for our own tool
+is not the same as fabricating an Apple one. `mig` / `migcom` ship man pages upstream
 but are host-only build tools not installed into the target userland, so their
 pages are not shipped.

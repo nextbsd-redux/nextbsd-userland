@@ -1,0 +1,237 @@
+.\" wlan(8) — NextBSD WLAN command-line client.
+.\"
+.\" NextBSD-original. There is no upstream page to vendor: Apple's equivalent
+.\" surface lives inside the closed wifid and is reached via the private
+.\" Apple80211 framework (the airport(8) CLI macOS shipped was removed in
+.\" Sonoma). This page is written for this tool.
+.\"
+.Dd July 14, 2026
+.Dt WLAN 8
+.Os NextBSD
+.Sh NAME
+.Nm wlan
+.Nd manage 802.11 wireless networks
+.Sh SYNOPSIS
+.Nm
+.Cm list
+.Nm
+.Cm scan
+.Op Ar interface
+.Nm
+.Cm status
+.Op Ar interface
+.Nm
+.Cm connect Ar ssid
+.Op Ar passphrase
+.Op Ar interface
+.Nm
+.Cm disconnect
+.Op Ar interface
+.Sh DESCRIPTION
+.Nm
+is the command-line client for
+.Xr wland 8 ,
+the NextBSD 802.11 management daemon.
+It scans for networks, joins them, and reports the current association.
+.Pp
+It is a pure-C Mach client: it looks up the
+.Ql org.nextbsd.wlan
+Mach service and issues MIG RPCs.
+It does not link CoreFoundation or SystemConfiguration, so it is also the
+.Em only
+supported way for anything above the Mach line \(em including the Gershwin
+desktop \(em to drive WLAN.
+.Pp
+If
+.Ar interface
+is omitted,
+.Nm
+acts on the first WLAN interface
+.Xr wland 8
+owns, which on any single-radio machine is the only one.
+.Sh COMMANDS
+.Bl -tag -width "disconnect"
+.It Cm list
+List the WLAN interfaces
+.Xr wland 8
+manages.
+These are the VAPs it cloned itself, so the answer is authoritative in a way
+.Xr ifconfig 8
+is not: net80211 VAPs go through
+.Fn ether_ifattach
+and therefore report
+.Dv IFT_ETHER ,
+so the media type cannot distinguish
+.Li wlan0
+from
+.Li em0 .
+.It Cm scan Op Ar interface
+Request a scan and print the results: SSID, BSSID, signal strength, channel,
+and security.
+.Pp
+The scan RPC returns as soon as the scan is
+.Em requested ,
+not when it completes \(em a full-band sweep takes seconds, and holding a Mach
+reply port open that long would be rude.
+.Nm
+therefore waits a moment before reading the cache.
+Running
+.Cm scan
+twice in quick succession gives fresher results.
+.It Cm status Op Ar interface
+Print the current association: state, SSID, BSSID, signal, channel, security.
+.Pp
+Pay attention to the difference between
+.Ql associated
+and
+.Ql connected .
+See
+.Sx THE ASSOCIATED / CONNECTED DISTINCTION
+below \(em it is the single most confusing thing about 802.11, and it is almost
+always the answer to
+.Dq it says connected but I have no IP .
+.It Cm connect Ar ssid Op Ar passphrase Op Ar interface
+Associate with
+.Ar ssid .
+Omit
+.Ar passphrase
+for an open network.
+.Pp
+The network is
+.Em remembered
+on success \(em stored in a root-owned
+.Pa preferences.plist
+via SCPreferences \(em so
+.Xr wland 8
+will autojoin it at the next boot without asking again.
+.Pp
+Like
+.Cm scan ,
+this returns once the association has been
+.Em requested .
+The 4-way handshake takes time; watch it with
+.Cm status .
+.It Cm disconnect Op Ar interface
+Disassociate and stop autojoining, until asked again.
+.El
+.Sh THE ASSOCIATED / CONNECTED DISTINCTION
+802.11 has two moments that look alike and are not:
+.Bl -tag -width "connected"
+.It Ql associated
+The station has joined the BSS and net80211 has reached RUN state.
+.Em The port is not yet keyed .
+The interface reports its link UP at this instant, which is exactly why a naive
+DHCP client fires a DHCPDISCOVER here and has every packet silently dropped.
+.It Ql connected
+The WPA 4-way handshake has completed and the port is keyed.
+.Em Now
+traffic can flow.
+.El
+.Pp
+NextBSD does not guess.
+.Xr wland 8
+publishes
+.Ql State:/Network/Interface/<if>/AirPort
+with an
+.Ql Authenticated
+flag that is true only in the
+.Ql connected
+state, and
+.Xr ipconfigd 8
+holds DHCP until it sees it.
+So if
+.Cm status
+says
+.Ql associated ,
+you have no IP address
+.Em on purpose ,
+and that is the system working correctly.
+If it stays there, authentication is failing \(em nearly always a wrong
+passphrase.
+.Sh FILES
+.Bl -tag -width "/Local/Library/Preferences/SystemConfiguration/org.nextbsd.wland.plist" -compact
+.It Pa /var/log/wland.stderr
+.Xr wland 8
+log.
+.It Pa /Local/Library/Preferences/SystemConfiguration/org.nextbsd.wland.plist
+Known networks.
+.Em Passphrases are stored in plaintext ;
+see
+.Xr wland 8 .
+.El
+.Sh EXAMPLES
+Find and join a network:
+.Bd -literal -offset indent
+# wlan scan
+SSID                             BSSID              SIGNAL   CH SECURITY
+Home                             a4:2b:b0:11:22:33  ****  -42   6 WPA2
+Cafe                             de:ad:be:ef:00:01  **    -71  36 open
+
+# wlan connect Home hunter2hunter2
+associating with 'Home' on wlan0...
+
+# wlan status
+interface: wlan0
+state:     connected
+ssid:      Home
+bssid:     a4:2b:b0:11:22:33
+signal:    -42 dBm
+channel:   6
+security:  WPA2
+.Ed
+.Pp
+Watch the handshake complete \(em the moment DHCP is released:
+.Bd -literal -offset indent
+# wlan connect Home hunter2hunter2 && wlan status
+state:     associated (not yet keyed)
+
+note: associated but NOT yet keyed \(em DHCP is held until the
+4-way handshake completes.
+
+# wlan status
+state:     connected
+.Ed
+.Sh DIAGNOSTICS
+.Bl -tag -width "wpa_supplicant is not reachable"
+.It Sy cannot reach org.nextbsd.wlan
+.Xr wland 8
+is not running.
+Check
+.Pa /var/log/wland.stderr
+and
+.Ql launchctl list | grep wland .
+.It Sy no WLAN interfaces
+.Xr wland 8
+found no 802.11 radio, so it cloned no VAP.
+Check
+.Ql sysctl net.wlan.devices .
+If that is empty, the driver did not attach \(em or, on arm64, net80211 is not
+in the kernel at all.
+.It Sy wpa_supplicant is not reachable
+The interface exists but its
+.Xr wpa_supplicant 8
+died or never started.
+.Pa /var/log/wland.stderr
+will say why.
+.El
+.Sh SEE ALSO
+.Xr ifconfig 8 ,
+.Xr ipconfigd 8 ,
+.Xr wland 8 ,
+.Xr wpa_supplicant 8
+.Pp
+.Lk https://pkgdemon.github.io/nextbsd-wlan-plan.html "The NextBSD WLAN plan"
+.Sh HISTORY
+.Nm
+first appeared in NextBSD in 2026.
+.Sh BUGS
+.Cm scan
+sleeps a fixed interval before reading results rather than waiting for the
+scan-complete event, so a slow radio may return a short list on the first call.
+Run it again.
+.Pp
+WPA-Enterprise (802.1X) networks are listed by
+.Cm scan
+but cannot be joined with
+.Cm connect ,
+which only knows PSK and open networks.
