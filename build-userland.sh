@@ -650,6 +650,48 @@ test -x "$DESTDIR/usr/sbin/ipconfig" || { echo "FAIL: /usr/sbin/ipconfig not bui
 echo "==> ipconfigd + ipconfig built"
 # DROPPED: ipconfigtest/ipconfigrpctest (host-exec).
 
+# ---- WLAN (wland + the wlan CLI) --------------------------------------------
+# The 802.11 management daemon. Same shape as IPConfiguration above: generate the
+# wlan.defs MIG stubs with the host mig, build the daemon (bsd.prog.mk) with
+# MIGOUT, then hand-link the CLI from wlan.c + the MIG *user* stub.
+#
+# Built AFTER IPConfiguration deliberately: wland publishes
+# State:/Network/Interface/<if>/AirPort, and ipconfigd's DHCP gate consumes it.
+# They are independent binaries, but the dependency runs that way and the build
+# order should read the same.
+#
+# wland drives STOCK wpa_supplicant from FreeBSD base — nothing to build here.
+# It is NOT vendored, NOT patched, and NOT the security/wpa_supplicant port.
+comp "wland"
+mkdir -p "$DESTDIR/usr/sbin"
+WLAN_MIG="$MIGROOT/wlan"
+rm -rf "$WLAN_MIG"; mkdir -p "$WLAN_MIG"
+run_mig "$WLAN_MIG" -I"$SRC/libmach/include" -I"$SRC/WLAN" \
+    -header wlan.h -user wlanUser.c \
+    -server wlanServer.c -sheader wlanServer.h \
+    "$SRC/WLAN/wlan.defs" \
+    || { echo "FAIL: mig could not process wlan.defs"; exit 1; }
+test -s "$WLAN_MIG/wlanServer.c" || { echo "FAIL: mig produced no wlanServer.c"; exit 1; }
+run_buildenv "make -C $SRC/WLAN DESTDIR=$DESTDIR SYSROOT=$SYSROOT MIGOUT=$WLAN_MIG all install"
+test -x "$DESTDIR/usr/sbin/wland" || { echo "FAIL: /usr/sbin/wland not installed"; exit 1; }
+
+comp "wlan(8) CLI"
+# Same bare cross-`cc` link as ipconfig(8). Pure-C MIG client — no CF, no SC, so
+# it links only liblaunch + the Mach syscall shim. This is deliberately the ONLY
+# way anything above the Mach line talks to wland: no Gershwin process has ever
+# spoken Mach, and Gershwin's libdispatch is built with HAVE_MACH force-disabled,
+# so a CLI is the bridge.
+$CROSS_CC --sysroot="$SYSROOT" \
+    -I"$WLAN_MIG" -I"$SRC/WLAN" \
+    -I"$SRC/launchd/liblaunch" -I"$SRC/launchd/freebsd-shims" \
+    -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib/system" \
+    -Wno-macro-redefined -Wl,-rpath,/usr/lib/system -Wl,--allow-shlib-undefined \
+    -o "$DESTDIR/usr/sbin/wlan" \
+    "$SRC/WLAN/wlan.c" "$WLAN_MIG/wlanUser.c" \
+    -llaunch -lsystem_kernel
+test -x "$DESTDIR/usr/sbin/wlan" || { echo "FAIL: /usr/sbin/wlan not built"; exit 1; }
+echo "==> wland + wlan built"
+
 # ---- mDNSResponder + libdns_sd ----------------------------------------------
 # build.sh ~2400-2461. mDNSResponder daemon (bsd.prog.mk) then libdns_sd
 # (bsd.lib.mk). No MIG surface in these blocks.

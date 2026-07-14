@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  org.nextbsd.wland.plist
+
+  Boot-time launchd plist for wland, the NextBSD 802.11 management daemon.
+
+  WHY org.nextbsd.* AND NOT com.apple.*
+
+  The other system daemons here keep Apple's exact labels (com.apple.configd,
+  com.apple.notifyd, com.apple.IPConfiguration), because a daemon that models an
+  Apple service inherits Apple's label — and because Apple-derived code looks
+  those labels up (a clean-room Security.framework carries
+  bootstrap_look_up("com.apple.securityd") in its own source).
+
+  Neither applies here. Apple's daemon is `wifid`; ours is `wland`. So
+  com.apple.wland would be a FABRICATED Apple label for a daemon Apple never
+  shipped — the worst of both worlds. And nothing Apple-derived looks this label
+  up: we write the `wlan` CLI, we write the System Preferences backend, and the
+  CoreWLAN-shaped ObjC API lives above the Mach line in Gershwin. Both ends are
+  ours, so the label is ours.
+
+  WHAT WLAND DOES
+
+  1. Clones the 802.11 VAP off each radio (`ifconfig wlan0 create wlandev
+     iwlwifi0` — on stock FreeBSD that is rc.conf's job, and NextBSD has no
+     rc.conf and no /etc/rc.d, so it had no owner at all).
+  2. Spawns and drives STOCK wpa_supplicant from base over its control socket,
+     with an EMPTY config, so wland is the sole author of every network block.
+  3. Publishes State:/Network/Interface/<if>/AirPort {Authenticated, SSID,
+     BSSID, RSSI, Channel, Security} — which is the predicate ipconfigd's DHCP
+     gate waits on. Without this key, DHCP on WLAN does not work AT ALL: net80211
+     reports the link UP at association, before the WPA 4-way handshake, so
+     ipconfigd would DHCP onto an unauthenticated port and every packet would be
+     dropped.
+
+  RunAtLoad + KeepAlive: starts at PID-1 launchd boot and respawns on crash.
+  There is NO launchd service ordering in this port (no StartAfter, no Requires,
+  and the plist directory scan is not even sorted), so wland must NOT assume
+  configd is up when it starts — it opens the SCDynamicStore lazily and tolerates
+  NULL, which is the same pattern ipconfigd's sc_publish.c uses.
+
+  StandardErrorPath / StandardOutPath route the log to /var/log/wland.stderr,
+  matching the ipconfigd / configd convention; the CI boot test dumps these
+  post-boot.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.nextbsd.wland</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/sbin/wland</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>MachServices</key>
+    <dict>
+        <key>org.nextbsd.wlan</key>
+        <true/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/var/log/wland.stderr</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/wland.stderr</string>
+</dict>
+</plist>
