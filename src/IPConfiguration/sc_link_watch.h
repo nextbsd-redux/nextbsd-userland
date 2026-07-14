@@ -1,13 +1,21 @@
 /*
- * sc_link_watch.h — ipconfigd SCDynamicStore link-state watcher.
+ * sc_link_watch.h — ipconfigd SCDynamicStore interface-state watcher.
  *
- * Replaces hwreg_subscribe (the removed hwregd attach trigger) with a
- * watch on State:/Network/Interface/<if>/Link, which the standalone
- * KernelEventMonitor publishes from PF_ROUTE link-state changes. The
- * watcher invokes the caller's callback whenever an interface's Link
- * entity appears or changes — carrying the current Active state — so
- * ipconfigd can both admin-up a newly-seen interface (whose link is
- * still down) and start DHCP once the link is Active.
+ * Watches two entities per interface:
+ *
+ *   State:/Network/Interface/<if>/Link      configd's KernelEventMonitor
+ *                                           publishes it from PF_ROUTE.
+ *   State:/Network/Interface/<if>/AirPort   wland publishes it (802.11).
+ *
+ * The callback fires when an interface should be admin-upped (link down) or
+ * DHCP'd (link up). DHCP requires BOTH Link{Active} AND
+ * AirPort{Authenticated} — because net80211 reports the link UP at
+ * ASSOCIATION, which is before the WPA 4-way handshake, and DHCP onto an
+ * unauthenticated port is simply dropped.
+ *
+ * An interface with NO AirPort key is treated as ready. That default is what
+ * keeps every wired NIC behaving exactly as it did before the gate existed.
+ * See sc_link_watch.c for the full rationale.
  */
 #ifndef SC_LINK_WATCH_H
 #define SC_LINK_WATCH_H
