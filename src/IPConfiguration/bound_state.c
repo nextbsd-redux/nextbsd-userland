@@ -1,79 +1,225 @@
 /*
- * bound_state.c — single global, mutex-guarded.
+ * bound_state.c — per-interface lease table, mutex-guarded.
  *
- * iter 5a tracks one binding (em0 in CI). iter 5b widens to a small
- * array of per-interface entries when the threading rework lands.
+ * See bound_state.h for why this stopped being a single global (it was
+ * the shared root of #37 and #38) and how the primary election works
+ * (#41).
+ *
+ * The table is a flat BOUND_MAX_IF array scanned linearly. With at most
+ * a handful of interfaces that is faster than anything cleverer, and it
+ * keeps every operation a single critical section.
  */
 #include "bound_state.h"
 
 #include <pthread.h>
 #include <string.h>
 
-struct {
-	pthread_mutex_t		lock;
+struct bound_entry {
 	bool			bound;
 	char			ifname[IF_NAMESIZE];
 	struct dhcp_lease	lease;
-} g_bound = { PTHREAD_MUTEX_INITIALIZER, false, "", { {0}, {0}, {0}, {0}, 0, {{0}}, 0 } };
+};
+
+/*
+ * Designated initializer: only the mutex needs a value. Spelling a
+ * struct dhcp_lease out positionally means this warns (and eventually breaks)
+ * every time that struct gains a field — which is exactly what
+ * -Wmissing-field-initializers caught. Static storage zero-fills the rest,
+ * which is the same "nothing is bound" state bound_state_init() establishes.
+ */
+static struct {
+	pthread_mutex_t		lock;
+	struct bound_entry	e[BOUND_MAX_IF];
+} g_bound = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+/* Caller holds the lock. Returns the slot for `ifname`, or NULL. */
+static struct bound_entry *
+find_locked(const char *ifname)
+{
+	int i;
+
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		if (g_bound.e[i].bound &&
+		    strcmp(g_bound.e[i].ifname, ifname) == 0)
+			return (&g_bound.e[i]);
+	}
+	return (NULL);
+}
+
+/* Caller holds the lock. Returns the highest-ranked bound slot, or NULL. */
+static struct bound_entry *
+primary_locked(void)
+{
+	struct bound_entry *best = NULL;
+	int best_rank = -1, i;
+
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		int r;
+
+		if (!g_bound.e[i].bound)
+			continue;
+		r = iface_rank(g_bound.e[i].ifname);
+		if (r > best_rank) {
+			best_rank = r;
+			best = &g_bound.e[i];
+		}
+	}
+	return (best);
+}
 
 void
 bound_state_init(void)
 {
-	/* Static initializer above suffices; the function exists so
-	 * main() has a clear init-time hook for iter 5b's table init. */
+	int i;
+
+	(void)pthread_mutex_lock(&g_bound.lock);
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		g_bound.e[i].bound = false;
+		g_bound.e[i].ifname[0] = '\0';
+		(void)memset(&g_bound.e[i].lease, 0,
+		    sizeof(g_bound.e[i].lease));
+	}
+	(void)pthread_mutex_unlock(&g_bound.lock);
+}
+
+int
+iface_rank(const char *ifname)
+{
+	if (ifname == NULL || ifname[0] == '\0')
+		return (IFRANK_OTHER);
+	if (strncmp(ifname, "lo", 2) == 0)
+		return (IFRANK_NEVER);
+	if (strncmp(ifname, "wlan", 4) == 0)
+		return (IFRANK_WIRELESS);
+	/*
+	 * Everything else that got far enough to hold a DHCP lease came
+	 * through dhcp_pick_interface()'s IFT_ETHER filter, so treating it
+	 * as wired is right. Note this deliberately catches wlan0 *only* by
+	 * name: net80211 VAPs report IFT_ETHER too (they go through
+	 * ether_ifattach), so there is no media type to test against.
+	 */
+	return (IFRANK_WIRED);
 }
 
 void
 bound_state_set(const char *ifname, const struct dhcp_lease *lease)
 {
+	struct bound_entry *e;
+	int i;
+
+	if (ifname == NULL || lease == NULL)
+		return;
+
 	(void)pthread_mutex_lock(&g_bound.lock);
-	if (ifname == NULL || lease == NULL) {
-		g_bound.bound = false;
-		g_bound.ifname[0] = '\0';
-		(void)memset(&g_bound.lease, 0, sizeof(g_bound.lease));
-	} else {
-		g_bound.bound = true;
-		(void)strlcpy(g_bound.ifname, ifname,
-		    sizeof(g_bound.ifname));
-		g_bound.lease = *lease;
+	e = find_locked(ifname);
+	if (e == NULL) {
+		for (i = 0; i < BOUND_MAX_IF; i++) {
+			if (!g_bound.e[i].bound) {
+				e = &g_bound.e[i];
+				break;
+			}
+		}
+	}
+	if (e != NULL) {
+		e->bound = true;
+		(void)strlcpy(e->ifname, ifname, sizeof(e->ifname));
+		e->lease = *lease;
+	}
+	/* Table full: drop the binding rather than evict someone else's.
+	 * BOUND_MAX_IF is far above any real machine, so this is a
+	 * can't-happen guard, not a policy. */
+	(void)pthread_mutex_unlock(&g_bound.lock);
+}
+
+void
+bound_state_clear(const char *ifname)
+{
+	struct bound_entry *e;
+
+	if (ifname == NULL)
+		return;
+	(void)pthread_mutex_lock(&g_bound.lock);
+	e = find_locked(ifname);
+	if (e != NULL) {
+		e->bound = false;
+		e->ifname[0] = '\0';
+		(void)memset(&e->lease, 0, sizeof(e->lease));
 	}
 	(void)pthread_mutex_unlock(&g_bound.lock);
 }
 
 bool
-bound_state_any(char *name_out, size_t name_out_sz)
+bound_state_is_bound(const char *ifname)
 {
-	bool any;
+	bool hit;
 
+	if (ifname == NULL)
+		return (false);
 	(void)pthread_mutex_lock(&g_bound.lock);
-	any = g_bound.bound;
-	if (any && name_out != NULL && name_out_sz > 0)
-		(void)strlcpy(name_out, g_bound.ifname, name_out_sz);
+	hit = (find_locked(ifname) != NULL);
 	(void)pthread_mutex_unlock(&g_bound.lock);
-	return (any);
+	return (hit);
 }
 
 int
 bound_state_count(void)
 {
-	int n;
+	int n = 0, i;
 
 	(void)pthread_mutex_lock(&g_bound.lock);
-	n = g_bound.bound ? 1 : 0;
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		if (g_bound.e[i].bound)
+			n++;
+	}
 	(void)pthread_mutex_unlock(&g_bound.lock);
 	return (n);
 }
 
 bool
+bound_state_primary(char *name_out, size_t name_out_sz)
+{
+	struct bound_entry *e;
+	bool any;
+
+	(void)pthread_mutex_lock(&g_bound.lock);
+	e = primary_locked();
+	any = (e != NULL);
+	if (any && name_out != NULL && name_out_sz > 0)
+		(void)strlcpy(name_out, e->ifname, name_out_sz);
+	(void)pthread_mutex_unlock(&g_bound.lock);
+	return (any);
+}
+
+bool
 bound_state_get_addr(const char *ifname, uint32_t *addr_out)
 {
+	struct bound_entry *e;
 	bool hit = false;
 
 	if (ifname == NULL || addr_out == NULL)
 		return (false);
 	(void)pthread_mutex_lock(&g_bound.lock);
-	if (g_bound.bound && strcmp(ifname, g_bound.ifname) == 0) {
-		*addr_out = g_bound.lease.addr.s_addr;
+	e = find_locked(ifname);
+	if (e != NULL) {
+		*addr_out = e->lease.addr.s_addr;
+		hit = true;
+	}
+	(void)pthread_mutex_unlock(&g_bound.lock);
+	return (hit);
+}
+
+bool
+bound_state_get_lease(const char *ifname, struct dhcp_lease *out)
+{
+	struct bound_entry *e;
+	bool hit = false;
+
+	if (ifname == NULL || out == NULL)
+		return (false);
+	(void)pthread_mutex_lock(&g_bound.lock);
+	e = find_locked(ifname);
+	if (e != NULL) {
+		*out = e->lease;
 		hit = true;
 	}
 	(void)pthread_mutex_unlock(&g_bound.lock);

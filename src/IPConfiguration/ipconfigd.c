@@ -6,9 +6,7 @@
  * runs it as a configd plugin; we run standalone because this
  * repo's configd has no plugin loader (see [[configd-port-state]]
  * memory). Plan inventory + amputation list at
- * pkgdemon.github.io/freebsd-ipconfiguration-plan.html (note: that
- * doc targets the sibling AF_UNIX / GNUstep-DO repo; here we keep
- * Apple's Mach IPC + MIG, same as configd / hwregd).
+ * pkgdemon.github.io/nextbsd-ipconfiguration-plan.html.
  *
  * iter 1 — daemon skeleton. main + signal handling + getifaddrs
  * interface enumeration + bootstrap_check_in for
@@ -32,21 +30,46 @@
  * mach_service.c spawns a pthread that bootstrap_check_in's the
  * service port and runs _ipconfig_server() (MIG demux for
  * ipconfig.defs) on each request. The worker reads live state via
- * bound_state.{c,h}; the main thread (DHCP + lease loop) writes it
- * on BOUND. iter 5a vendors 2 read-only routines (if_count,
- * if_addr); the full ipconfig.defs surface grows in iter 6+.
+ * bound_state.{c,h}; each interface's DHCP worker writes it on BOUND.
+ * iter 5a vendors 2 read-only routines (if_count, if_addr); the full
+ * ipconfig.defs surface grows in iter 6+.
  *
  * link-state DHCP trigger — react to link-up via SCDynamicStore.
  * sc_link_watch.c watches State:/Network/Interface/<if>/Link, which
  * the standalone KernelEventMonitor daemon publishes from PF_ROUTE
  * link-state changes; when an interface goes Active the watch invokes
- * on_link_event(), which admin-ups it (link down) or runs DHCP (link up) on it. This is the Apple-shaped
- * trigger (KernelEventMonitor -> SCDynamicStore -> IPConfiguration);
- * it replaced the earlier hwregd attach subscription (removed with
- * hwregd in PR #167). At startup we bring the candidate NIC IFF_UP so
- * its link negotiates, then let the watch fire DHCP — fixing the
- * stock-kernel case where a real NIC's link comes up a beat after a
- * one-shot startup scan would have given up.
+ * on_link_event(), which admin-ups it (link down) or starts a DHCP
+ * worker (link up). This is the Apple-shaped trigger
+ * (KernelEventMonitor -> SCDynamicStore -> IPConfiguration); it
+ * replaced the earlier hwregd attach subscription (removed with hwregd
+ * in PR #167). At startup we bring the candidate NIC IFF_UP so its link
+ * negotiates, then let the watch fire DHCP — fixing the stock-kernel
+ * case where a real NIC's link comes up a beat after a one-shot startup
+ * scan would have given up.
+ *
+ * multi-interface (#37/#38/#39/#41) — the daemon was, structurally, a
+ * single-interface wired-desktop daemon, and WLAN is what forced it to
+ * grow up. Four bugs, all invisible while only ever one wired NIC was
+ * exercised:
+ *
+ *   #38  exactly ONE interface could ever bind, for the daemon's whole
+ *        lifetime — a global g_dhcp_started plus a global bound_state.
+ *        There is now one worker slot and one lease-table entry per
+ *        interface, so em0 and wlan0 bind independently.
+ *   #37  the post-expiry re-arm was dead code: it cleared the in-flight
+ *        flag but nothing ever cleared bound_state, so the next guard
+ *        short-circuited and DHCP never ran again until restart. Workers
+ *        now clear their own entry on teardown.
+ *   #39  there was no deconfigure path at all — no SIOCDIFADDR, no
+ *        RTM_DELETE anywhere. Walk out of WLAN range and the dead IP and
+ *        dead default route stayed installed, blackholing traffic. A
+ *        link-down now unwinds that interface's worker, which takes them
+ *        back.
+ *   #41  State:/Network/Global/IPv4 was last-binder-wins, so "primary
+ *        interface" was a race between em0 and wlan0 — and both
+ *        mDNSResponder and hostnamed read that key. Primary is now the
+ *        highest-ranked bound interface (wired > wireless), re-elected
+ *        on every bind and teardown; /etc/resolv.conf follows it.
  */
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -62,6 +85,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,15 +111,39 @@
 volatile sig_atomic_t got_term;
 
 /*
- * Serializes DHCP attempts driven by the link-watch callback. The
- * watch fires on a libdispatch worker thread and may fire more than
- * once (initial scan + an event, or several interfaces); g_dhcp_started
- * ensures only one run is in flight. It stays set while a successful
- * run blocks in lease_loop_run (we are bound), and is cleared if a run
- * returns (DHCP failed) so a later link event can retry.
+ * Per-interface DHCP workers (#38).
+ *
+ * This was a single global `g_dhcp_started` int plus a check of
+ * bound_state_any(), which together permitted exactly ONE bound
+ * interface for the daemon's lifetime: once any interface was in flight
+ * or bound, every later link event returned early. On a laptop with em0
+ * and wlan0, whichever linked first won and the other was ignored
+ * forever — so the WLAN DHCP gate could be perfectly correct and still
+ * be defeated by em0 winning the race.
+ *
+ * It is now one slot per interface. Each slot owns a thread that runs
+ * that interface's DHCP exchange and then parks in its lease loop, plus
+ * a `stop` flag the link-watch sets to unwind that thread when the link
+ * drops.
+ *
+ * The threads are deliberately real pthreads rather than more work on
+ * libdispatch. dhcp_run_on_interface() blocks for the entire life of a
+ * lease — hours — and it used to do that *on the libdispatch worker
+ * thread that delivered the link event*. One interface merely held a
+ * dispatch thread hostage; N interfaces would starve the pool and
+ * deadlock the watch that feeds them. A thread per bound interface costs
+ * nothing at the two-or-three interfaces any real machine has.
  */
-static pthread_mutex_t	g_dhcp_lock = PTHREAD_MUTEX_INITIALIZER;
-static int		g_dhcp_started;
+struct dhcp_worker {
+	bool			active;		/* slot in use */
+	char			ifname[IFNAMSIZ];
+	pthread_t		tid;
+	volatile sig_atomic_t	stop;		/* link went down: unwind */
+	uint32_t		lease_cap_secs;
+};
+
+static pthread_mutex_t	g_workers_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct dhcp_worker g_workers[BOUND_MAX_IF];
 
 static void
 on_signal(int sig)
@@ -218,18 +266,23 @@ read_lease_cap_env(void)
 
 /*
  * dhcp_run_on_interface — full DHCPv4 INIT → BOUND → publish → RA →
- * lease loop on `ifname`. Driven by the link-watch callback
- * (on_link_event) when KernelEventMonitor reports the link Active.
+ * lease loop on `ifname`, then teardown. Runs on that interface's own
+ * worker thread.
  *
- * Blocks in lease_loop_run until SIGTERM; never returns from a fully
- * successful path. On any failure the function returns cleanly and
- * on_link_event re-arms so a later link-up event can retry.
+ * Returns when the lease is lost, the link goes down (*stop), or the
+ * daemon is shutting down (got_term). Every one of those paths falls
+ * through to the single teardown block at the bottom — there are no
+ * early returns once the interface is bound, which is what the old code
+ * did on a publish failure (it left the lease applied and the interface
+ * in bound_state, but never entered the lease loop, so the lease silently
+ * expired and was never renewed).
  */
 static void
-dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
+dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs,
+    volatile sig_atomic_t *stop)
 {
 	struct dhcp_lease lease;
-	struct sc_publish *pub;
+	struct sc_publish *pub = NULL;
 	char a[INET_ADDRSTRLEN], m[INET_ADDRSTRLEN];
 	char r[INET_ADDRSTRLEN], s[INET_ADDRSTRLEN];
 	struct ra_info ra;
@@ -238,6 +291,17 @@ dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
 	xlog("selected interface for DHCPv4: %s", ifname);
 	if (dhcp_lease_acquire(ifname, &lease) != 0) {
 		/* dhcp_lease_acquire logged IPCFG-BOUND-FAIL on its own line */
+		return;
+	}
+
+	/*
+	 * The DISCOVER ladder can burn ~28s. If the link dropped or the
+	 * daemon is going down in that window, do not install a lease we
+	 * are about to have to rip back out.
+	 */
+	if (got_term || (stop != NULL && *stop)) {
+		xlog("%s: link/daemon went away during DHCP — discarding lease",
+		    ifname);
 		return;
 	}
 
@@ -263,39 +327,47 @@ dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
 	xlog("IPCFG-BOUND-OK");
 
 	/*
-	 * Publish to configd. Failure is non-fatal: the daemon stays up,
-	 * the lease is already applied at the kernel level, but
-	 * observers watching State:/Network/Service/... won't see this
-	 * binding. CI marker IPCFG-STORE-FAIL flags it.
+	 * Publish to configd. Failure is non-fatal: the daemon stays up and
+	 * the lease is already applied at the kernel level; observers just
+	 * won't see the binding. We still enter the lease loop, because a
+	 * lease nobody published is a lease that still has to be renewed.
 	 */
 	pub = sc_publish_open("ipconfigd");
 	if (pub == NULL) {
 		xlog("IPCFG-STORE-FAIL: no configd session");
-		return;
-	}
-	if (sc_publish_ipv4(pub, ifname, &lease) != 0) {
+	} else if (sc_publish_ipv4(pub, ifname, &lease) != 0) {
 		xlog("IPCFG-STORE-FAIL: set State:/.../IPv4");
-		sc_publish_close(pub);
-		return;
+	} else {
+		xlog("IPCFG-STORE-OK");
+
+		/*
+		 * Issue #88: publish State:/Network/Service/<UUID>/DHCP
+		 * carrying InterfaceName + LeaseStartTime, and Option_12 (host
+		 * name) when the lease supplied it. SLIRP doesn't ship
+		 * Option_12, so the marker proves the key/dict shape is
+		 * correct; hostnamed iter 3 is the first consumer that reads
+		 * it. Failure is non-fatal — the IPv4 publish already
+		 * succeeded.
+		 */
+		if (sc_publish_dhcp(pub, ifname, &lease) != 0) {
+			xlog("IPCFG-DHCP-FAIL: set State:/.../DHCP");
+		} else {
+			xlog("IPCFG-DHCP-OK: published /DHCP "
+			    "(Option_12 %s)",
+			    lease.host_name_len > 0
+			        ? lease.host_name : "absent");
+		}
 	}
-	xlog("IPCFG-STORE-OK");
 
 	/*
-	 * Issue #88: publish State:/Network/Service/<UUID>/DHCP carrying
-	 * InterfaceName + LeaseStartTime, and Option_12 (host name) when
-	 * the lease supplied it. SLIRP doesn't ship Option_12 so the
-	 * marker proves the key/dict shape is correct; hostnamed iter 3
-	 * is the first consumer that reads it. Failure is non-fatal —
-	 * the IPv4 publish already succeeded.
+	 * Re-elect the primary now that this interface is in bound_state
+	 * (#41), then render /etc/resolv.conf from whoever won. Doing DNS
+	 * off the primary rather than off `lease` is what stops a wlan0
+	 * binding from stomping a wired em0's resolvers.
 	 */
-	if (sc_publish_dhcp(pub, ifname, &lease) != 0) {
-		xlog("IPCFG-DHCP-FAIL: set State:/.../DHCP");
-	} else {
-		xlog("IPCFG-DHCP-OK: published /DHCP "
-		    "(Option_12 %s)",
-		    lease.host_name_len > 0
-		        ? lease.host_name : "absent");
-	}
+	if (pub != NULL)
+		(void)sc_publish_update_primary(pub);
+	resolv_conf_sync();
 
 	/*
 	 * iter 7a: solicit + listen for one RA, derive a SLAAC address,
@@ -316,8 +388,9 @@ dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
 		struct in6_addr v6;
 
 		if (apply_ra_lease(ifname, &ra, &v6) == 0) {
-			(void)sc_publish_ipv6(pub, ifname, &v6,
-			    ra.prefix_len, &ra.router_lladdr);
+			if (pub != NULL)
+				(void)sc_publish_ipv6(pub, ifname, &v6,
+				    ra.prefix_len, &ra.router_lladdr);
 			xlog("IPCFG-RA-OK");
 		} else {
 			xlog("IPCFG-RA-MISS: apply_ra_lease failed");
@@ -329,8 +402,152 @@ dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
 		xlog("IPCFG-RA-MISS: ra_acquire fatal");
 	}
 
-	(void)lease_loop_run(ifname, &lease, pub, lease_cap_secs);
-	sc_publish_close(pub);
+	/* Parks here for the life of the lease. */
+	(void)lease_loop_run(ifname, &lease, pub, lease_cap_secs, stop);
+
+	/*
+	 * Teardown (#37, #39).
+	 *
+	 * On SIGTERM we deliberately leave the address and route installed:
+	 * the machine should stay on the network across an ipconfigd restart,
+	 * and Apple's IPConfiguration behaves the same way. Every other exit
+	 * — lease expired without renewal, or the link went down — means the
+	 * configuration is now a lie, so we take it all back.
+	 *
+	 * Leaving it installed is exactly the bug in #39: walk out of WLAN
+	 * range and the dead IP plus the dead default route stayed, silently
+	 * blackholing traffic. And clearing bound_state here is what makes
+	 * the re-arm real (#37) — without it, bound_state_any() kept
+	 * reporting the interface bound and every future link event
+	 * short-circuited, so a single lease expiry meant the daemon never
+	 * DHCP'd again until restarted.
+	 */
+	if (got_term) {
+		xlog("%s: daemon shutting down — leaving the lease installed",
+		    ifname);
+	} else {
+		xlog("%s: lease lost or link down — deconfiguring", ifname);
+		(void)deconfigure_lease(ifname, &lease);
+		if (pub != NULL)
+			(void)sc_publish_remove(pub, ifname);
+		bound_state_clear(ifname);
+		if (pub != NULL)
+			(void)sc_publish_update_primary(pub);
+		resolv_conf_sync();
+	}
+
+	if (pub != NULL)
+		sc_publish_close(pub);
+}
+
+/*
+ * Worker thread body — one per interface that has linked up. Runs the
+ * whole DHCP + lease + teardown lifecycle, then releases its slot so a
+ * later link event on the same interface can start a fresh one. That
+ * release is the other half of the re-arm: the slot, not a global flag,
+ * is now what says "a run is in flight on this interface".
+ */
+static void *
+dhcp_worker_main(void *arg)
+{
+	struct dhcp_worker *w = arg;
+	char ifname[IFNAMSIZ];
+
+	(void)strlcpy(ifname, w->ifname, sizeof(ifname));
+	dhcp_run_on_interface(ifname, w->lease_cap_secs, &w->stop);
+
+	pthread_mutex_lock(&g_workers_lock);
+	w->active = false;
+	w->stop = 0;
+	w->ifname[0] = '\0';
+	pthread_mutex_unlock(&g_workers_lock);
+
+	xlog("%s: DHCP worker exited", ifname);
+	return (NULL);
+}
+
+/*
+ * Ask the worker owning `ifname` (if any) to unwind, and report whether
+ * there was one. Setting `stop` wakes it out of its lease-loop sleep; it
+ * then runs its own teardown and frees its slot. We deliberately do NOT
+ * join: teardown does ioctls and configd RPCs, and blocking the link-watch
+ * dispatch thread on that would be exactly the mistake this refactor exists
+ * to undo.
+ */
+static bool
+dhcp_worker_stop(const char *ifname)
+{
+	bool found = false;
+	int i;
+
+	pthread_mutex_lock(&g_workers_lock);
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		if (g_workers[i].active &&
+		    strcmp(g_workers[i].ifname, ifname) == 0) {
+			g_workers[i].stop = 1;
+			found = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&g_workers_lock);
+	return (found);
+}
+
+/*
+ * Start a DHCP worker for `ifname` unless one is already running for it.
+ * Returns true if a worker was spawned.
+ */
+static bool
+dhcp_worker_start(const char *ifname, uint32_t lease_cap_secs)
+{
+	struct dhcp_worker *w = NULL;
+	pthread_attr_t attr;
+	int i, rc;
+
+	pthread_mutex_lock(&g_workers_lock);
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		if (g_workers[i].active &&
+		    strcmp(g_workers[i].ifname, ifname) == 0) {
+			pthread_mutex_unlock(&g_workers_lock);
+			return (false);		/* already running */
+		}
+	}
+	for (i = 0; i < BOUND_MAX_IF; i++) {
+		if (!g_workers[i].active) {
+			w = &g_workers[i];
+			break;
+		}
+	}
+	if (w == NULL) {
+		pthread_mutex_unlock(&g_workers_lock);
+		xlog("%s: no free DHCP worker slot (%d in use) — ignoring",
+		    ifname, BOUND_MAX_IF);
+		return (false);
+	}
+	w->active = true;
+	w->stop = 0;
+	w->lease_cap_secs = lease_cap_secs;
+	(void)strlcpy(w->ifname, ifname, sizeof(w->ifname));
+	pthread_mutex_unlock(&g_workers_lock);
+
+	/*
+	 * Detached: nothing ever joins these. The daemon exits by process
+	 * teardown, and a worker's exit path is entirely self-contained.
+	 */
+	(void)pthread_attr_init(&attr);
+	(void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	/* pthread_create returns the error number; it does not set errno. */
+	rc = pthread_create(&w->tid, &attr, dhcp_worker_main, w);
+	(void)pthread_attr_destroy(&attr);
+	if (rc != 0) {
+		pthread_mutex_lock(&g_workers_lock);
+		w->active = false;
+		w->ifname[0] = '\0';
+		pthread_mutex_unlock(&g_workers_lock);
+		xlog("%s: pthread_create failed: %s", ifname, strerror(rc));
+		return (false);
+	}
+	return (true);
 }
 
 /*
@@ -340,26 +557,30 @@ dhcp_run_on_interface(const char *ifname, uint32_t lease_cap_secs)
  * link state. This is the Apple-shaped trigger that replaced the hwregd attach
  * subscription.
  *
- * Two cases:
- *   - link DOWN (active == 0): the interface is present but its link has not
- *     come up. Bring it administratively up so its link can negotiate. This is
- *     the critical path for a NIC that ARRIVES after startup — e.g. an
- *     auto-loaded driver kext (#219): ipconfigd's startup scan never saw it, so
- *     nothing else admin-ups it, and without IFF_UP the link stays down forever
- *     and it is never DHCP'd. iface_bring_up is idempotent (no-op if already
- *     up), so re-fires for an interface we already brought up are harmless. The
- *     resulting link-up generates a fresh Active:true event that lands us in the
- *     DHCP case below.
- *   - link UP (active != 0): run DHCP on the just-linked interface, guarding
- *     against concurrent / duplicate fires (skip if a run is in flight or we are
- *     already bound). Single-NIC focus is unchanged; multi-NIC fan-out is a
- *     later iter. dhcp_run_on_interface blocks in lease_loop_run on this worker
- *     thread once bound — fine, libdispatch services other work on other threads.
+ * Three cases:
+ *   - link DOWN on an interface we are BOUND on: the link we hold a lease over
+ *     just went away (unplugged, or walked out of WLAN range). Signal that
+ *     interface's worker to unwind; it deconfigures the address and default
+ *     route, clears bound_state, re-elects the primary, and frees its slot.
+ *     Before this existed the daemon simply kept the dead lease and its dead
+ *     default route forever (#39).
+ *   - link DOWN otherwise: the interface is present but its link has not come
+ *     up. Bring it administratively up so its link can negotiate. This is the
+ *     critical path for a NIC that ARRIVES after startup — e.g. an auto-loaded
+ *     driver kext (#219), or a wlan0 VAP that wland clones at runtime:
+ *     ipconfigd's startup scan never saw it, so nothing else admin-ups it, and
+ *     without IFF_UP the link stays down forever and it is never DHCP'd.
+ *     iface_bring_up is idempotent, so re-fires are harmless.
+ *   - link UP: start a DHCP worker for this interface, unless one is already
+ *     running for it. Note the guard is now PER-INTERFACE. It used to be a
+ *     global "is any DHCP in flight, or is anything at all bound?", which meant
+ *     the first interface to link up was the only one that could ever bind
+ *     (#38) — em0 would win the race and wlan0 was ignored for the daemon's
+ *     lifetime, no matter how correct the WLAN gate was.
  */
 static void
 on_link_event(const char *ifname, int active, uint32_t lease_cap_secs)
 {
-	char already[IFNAMSIZ] = "";
 	int i;
 
 	/* loopback never carries a DHCP service; the watcher filters lo0 too. */
@@ -367,6 +588,29 @@ on_link_event(const char *ifname, int active, uint32_t lease_cap_secs)
 		return;
 
 	if (!active) {
+		/*
+		 * Lost the link on an interface we hold a lease over — tear it
+		 * down (#39). The worker does the actual work on its own
+		 * thread; we only set its stop flag.
+		 */
+		if (bound_state_is_bound(ifname)) {
+			xlog("link-down(%s) — bound; unwinding its DHCP worker",
+			    ifname);
+			if (!dhcp_worker_stop(ifname)) {
+				/*
+				 * Bound with no worker: can't happen, since the
+				 * worker owns the binding for its whole life. If
+				 * it somehow does, don't leave a dead lease in
+				 * the store.
+				 */
+				xlog("link-down(%s) — bound but no worker; "
+				    "clearing state directly", ifname);
+				bound_state_clear(ifname);
+				resolv_conf_sync();
+			}
+			return;
+		}
+
 		/* Present but link down — admin-up so the link can negotiate
 		 * (the late-arriving-NIC onboarding path, #219).
 		 *
@@ -407,25 +651,14 @@ on_link_event(const char *ifname, int active, uint32_t lease_cap_secs)
 		return;
 	}
 
-	pthread_mutex_lock(&g_dhcp_lock);
-	if (g_dhcp_started || bound_state_any(already, sizeof(already))) {
-		pthread_mutex_unlock(&g_dhcp_lock);
-		return;
-	}
-	g_dhcp_started = 1;
-	pthread_mutex_unlock(&g_dhcp_lock);
-
-	xlog("link-active(%s) — running DHCP", ifname);
-	dhcp_run_on_interface(ifname, lease_cap_secs);
-
 	/*
-	 * Only reached if DHCP failed (a fully successful run blocks in
-	 * lease_loop_run and never returns). Re-arm so a later link event
-	 * can retry.
+	 * Link up. Per-interface guard: dhcp_worker_start() is a no-op if this
+	 * interface already has a worker (a duplicate fire, or the initial scan
+	 * racing a real event). Other interfaces are unaffected — that is the
+	 * whole point of #38.
 	 */
-	pthread_mutex_lock(&g_dhcp_lock);
-	g_dhcp_started = 0;
-	pthread_mutex_unlock(&g_dhcp_lock);
+	if (dhcp_worker_start(ifname, lease_cap_secs))
+		xlog("link-active(%s) — started DHCP worker", ifname);
 }
 
 int

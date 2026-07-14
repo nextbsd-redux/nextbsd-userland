@@ -1,22 +1,30 @@
 /*
- * apply_lease.c — install a bound DHCPv4 lease.
+ * apply_lease.c — install / remove a bound DHCPv4 lease.
  *
- * Three sub-steps, each independently fallible:
+ * apply_lease() has two sub-steps, each independently fallible:
  *   1. SIOCAIFADDR to add the lease's address + netmask + derived
  *      broadcast to the interface (this is the FreeBSD-native
  *      "add an alias" path; the kernel also auto-installs the
  *      connected /N route to the LAN).
  *   2. PF_ROUTE RTM_ADD for the default route via lease->router.
- *   3. Write nameserver lines to /etc/resolv.conf (best-effort;
- *      no fsync, no atomic-rename — iter 4 replaces this with a
- *      proper SCDynamicStore publish).
+ *
+ * deconfigure_lease() undoes exactly those two (#39). It is best-effort
+ * and idempotent by design: teardown races link-down, and when an
+ * interface's link drops the kernel may already have torn the address
+ * and route down for us. So EADDRNOTAVAIL / ESRCH / ENXIO mean "already
+ * gone", which is the state we wanted, not a failure.
+ *
+ * DNS lives in resolv_conf_sync(), driven off the *primary* interface
+ * rather than the calling one — see apply_lease.h.
  */
 #include "apply_lease.h"
 #include "arp_probe.h"
+#include "bound_state.h"
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -85,11 +93,58 @@ apply_address(const char *ifname, const struct dhcp_lease *lease)
 }
 
 /*
- * Add a default route to lease->router via the PF_ROUTE socket.
- * Mirrors what `route add default <router>` does.
+ * Remove the lease address from the interface (SIOCDIFADDR). The
+ * kernel drops the connected /N route with it.
+ *
+ * EADDRNOTAVAIL means the address is already off the interface — the
+ * link went down and the kernel cleaned up before we got here. That is
+ * the state we were trying to reach, so it is success, not failure.
  */
 static int
-install_default_route(const struct dhcp_lease *lease)
+remove_address(const char *ifname, const struct dhcp_lease *lease)
+{
+	struct ifreq ifr;
+	struct sockaddr_in *sin;
+	int sock, rc;
+
+	(void)memset(&ifr, 0, sizeof(ifr));
+	(void)strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+	sin = (struct sockaddr_in *)(void *)&ifr.ifr_addr;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof(*sin);
+	sin->sin_addr = lease->addr;
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		xlog("socket(AF_INET) failed: %s", strerror(errno));
+		return (-1);
+	}
+	rc = ioctl(sock, SIOCDIFADDR, &ifr);
+	if (rc != 0) {
+		if (errno == EADDRNOTAVAIL || errno == ENXIO) {
+			rc = 0;		/* already gone — fine */
+		} else {
+			xlog("SIOCDIFADDR(%s) failed: %s", ifname,
+			    strerror(errno));
+		}
+	}
+	(void)close(sock);
+	return (rc);
+}
+
+/*
+ * Add or delete the default route via lease->router on the PF_ROUTE
+ * socket. `rtm_type` is RTM_ADD or RTM_DELETE — the message shape is
+ * identical, which is why both paths share one function.
+ *
+ * Benign outcomes, treated as success:
+ *   RTM_ADD    + EEXIST  — the route is already there.
+ *   RTM_DELETE + ESRCH   — there is no such route to remove.
+ *   either     + ENETUNREACH/ENXIO — the interface is already gone.
+ */
+static int
+default_route(const struct dhcp_lease *lease, int rtm_type)
 {
 	struct {
 		struct rt_msghdr	hdr;
@@ -103,7 +158,7 @@ install_default_route(const struct dhcp_lease *lease)
 	(void)memset(&msg, 0, sizeof(msg));
 	msg.hdr.rtm_msglen = sizeof(msg);
 	msg.hdr.rtm_version = RTM_VERSION;
-	msg.hdr.rtm_type = RTM_ADD;
+	msg.hdr.rtm_type = rtm_type;
 	msg.hdr.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
 	msg.hdr.rtm_flags = RTF_UP | RTF_GATEWAY | RTF_STATIC;
 	msg.hdr.rtm_pid = (int32_t)getpid();
@@ -128,47 +183,103 @@ install_default_route(const struct dhcp_lease *lease)
 	}
 	n = write(sock, &msg, sizeof(msg));
 	if (n != (ssize_t)sizeof(msg)) {
-		/* EEXIST is benign — the route is already there (a
-		 * previous run, or a kernel default). Treat as success. */
-		if (errno == EEXIST) {
-			(void)close(sock);
-			return (0);
-		}
-		xlog("write(PF_ROUTE, RTM_ADD default) failed: %s",
-		    strerror(errno));
+		int e = errno;
+
 		(void)close(sock);
+		if ((rtm_type == RTM_ADD && e == EEXIST) ||
+		    (rtm_type == RTM_DELETE && e == ESRCH) ||
+		    e == ENETUNREACH || e == ENXIO)
+			return (0);
+		xlog("write(PF_ROUTE, %s default) failed: %s",
+		    rtm_type == RTM_ADD ? "RTM_ADD" : "RTM_DELETE",
+		    strerror(e));
 		return (-1);
 	}
 	(void)close(sock);
 	return (0);
 }
 
-static int
-write_resolv_conf(const struct dhcp_lease *lease)
+/*
+ * Atomically replace /etc/resolv.conf with the DNS servers of the
+ * *primary* interface (#41).
+ *
+ * Two bugs are fixed here at once. Per-interface writers meant the last
+ * NIC to bind owned global DNS, so a wlan0 lease would silently replace
+ * a wired em0's resolvers even though em0 outranks it. And the write
+ * was a bare fopen("w") — a reader could observe the file truncated and
+ * half-written, and nothing was fsync'd, so a crash could leave it
+ * empty (part of #40).
+ *
+ * When nothing is bound the file is left alone: better to keep stale
+ * resolvers than to have none, and a static resolv.conf that shipped in
+ * the image is not ours to blow away.
+ */
+void
+resolv_conf_sync(void)
 {
+	static const char path[] = "/etc/resolv.conf";
+	static const char tmpl[] = "/etc/.resolv.conf.XXXXXX";
+	struct dhcp_lease lease;
+	char primary[IF_NAMESIZE];
+	char tmp[sizeof(tmpl)];
+	unsigned i;
 	FILE *fp;
+	int fd;
 
-	if (lease->dns_count == 0)
-		return (0);	/* nothing to write */
-
-	/* Best-effort: write directly to /etc/resolv.conf. iter 4
-	 * replaces this with a State:/Network/Global/DNS publish that
-	 * a resolv.conf-rendering observer can consume. */
-	fp = fopen("/etc/resolv.conf", "w");
-	if (fp == NULL) {
-		xlog("fopen(/etc/resolv.conf) failed: %s", strerror(errno));
-		return (-1);
+	if (!bound_state_primary(primary, sizeof(primary)))
+		return;				/* nothing bound */
+	if (!bound_state_get_lease(primary, &lease))
+		return;				/* raced a teardown */
+	if (lease.dns_count == 0) {
+		xlog("resolv.conf: primary %s supplied no DNS — leaving "
+		    "the existing file alone", primary);
+		return;
 	}
-	(void)fprintf(fp, "# Generated by ipconfigd (DHCPv4)\n");
-	for (unsigned i = 0; i < lease->dns_count; i++) {
+
+	(void)memcpy(tmp, tmpl, sizeof(tmpl));
+	fd = mkstemp(tmp);
+	if (fd < 0) {
+		xlog("mkstemp(%s) failed: %s", tmpl, strerror(errno));
+		return;
+	}
+	fp = fdopen(fd, "w");
+	if (fp == NULL) {
+		xlog("fdopen failed: %s", strerror(errno));
+		(void)close(fd);
+		(void)unlink(tmp);
+		return;
+	}
+
+	(void)fprintf(fp, "# Generated by ipconfigd (DHCPv4) — primary "
+	    "interface %s\n", primary);
+	for (i = 0; i < lease.dns_count; i++) {
 		char buf[INET_ADDRSTRLEN];
 
-		if (inet_ntop(AF_INET, &lease->dns[i], buf, sizeof(buf))
+		if (inet_ntop(AF_INET, &lease.dns[i], buf, sizeof(buf))
 		    != NULL)
 			(void)fprintf(fp, "nameserver %s\n", buf);
 	}
+
+	if (fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
+		xlog("resolv.conf: flush/fsync failed: %s", strerror(errno));
+		(void)fclose(fp);
+		(void)unlink(tmp);
+		return;
+	}
 	(void)fclose(fp);
-	return (0);
+
+	/* 0644 — mkstemp made it 0600, and resolv.conf is world-readable. */
+	if (chmod(tmp, 0644) != 0)
+		xlog("resolv.conf: chmod failed: %s (continuing)",
+		    strerror(errno));
+
+	if (rename(tmp, path) != 0) {
+		xlog("resolv.conf: rename failed: %s", strerror(errno));
+		(void)unlink(tmp);
+		return;
+	}
+	xlog("resolv.conf: %u nameserver(s) from primary %s",
+	    lease.dns_count, primary);
 }
 
 int
@@ -184,9 +295,31 @@ apply_lease(const char *ifname, const struct dhcp_lease *lease)
 		 * is purely a peer ARP-cache update. iter 6 does not
 		 * gate apply_lease on it. */
 		(void)arp_announce(ifname, lease->addr);
-	if (install_default_route(lease) != 0)
+	if (default_route(lease, RTM_ADD) != 0)
 		rc = -1;
-	/* DNS is best-effort; failure doesn't fail the apply. */
-	(void)write_resolv_conf(lease);
+	/* DNS is not per-interface — the caller runs resolv_conf_sync()
+	 * once the binding is in bound_state and primary is settled. */
+	return (rc);
+}
+
+int
+deconfigure_lease(const char *ifname, const struct dhcp_lease *lease)
+{
+	int rc = 0;
+
+	/*
+	 * Route first, then address. The other order works too, but
+	 * removing the address drops the connected route the default
+	 * route's gateway is reached through, and some kernels then
+	 * refuse the RTM_DELETE with ESRCH — which we would have to
+	 * treat as benign anyway. Doing it this way keeps the common
+	 * path free of "expected" errors.
+	 */
+	if (default_route(lease, RTM_DELETE) != 0)
+		rc = -1;
+	if (remove_address(ifname, lease) != 0)
+		rc = -1;
+
+	xlog("deconfigured %s%s", ifname, rc == 0 ? "" : " (with errors)");
 	return (rc);
 }
