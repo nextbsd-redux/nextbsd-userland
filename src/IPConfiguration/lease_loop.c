@@ -44,20 +44,26 @@ xlog(const char *fmt, ...)
 }
 
 /*
- * Sleep for `seconds` in 1-second ticks, returning early if
- * `got_term` is asserted. Returns 0 on full wait, -1 if interrupted.
+ * Sleep for `seconds` in 1-second ticks, returning early if `got_term`
+ * (daemon shutdown) or `*stop` (this interface's link went down / it was
+ * removed) is asserted. Returns 0 on a full wait, -1 if interrupted.
+ *
+ * The per-interface `stop` is what lets a link-down unwind a worker that
+ * is parked in a T1 sleep — which on a real lease is hours. Before it
+ * existed, an interface that lost its link kept its lease, address and
+ * default route until the daemon exited (#39).
  */
 static int
-sleep_interruptible(uint32_t seconds)
+sleep_interruptible(uint32_t seconds, volatile sig_atomic_t *stop)
 {
 	uint32_t i;
 
 	for (i = 0; i < seconds; i++) {
-		if (got_term)
+		if (got_term || (stop != NULL && *stop))
 			return (-1);
 		(void)sleep(1);
 	}
-	return (got_term ? -1 : 0);
+	return ((got_term || (stop != NULL && *stop)) ? -1 : 0);
 }
 
 /*
@@ -75,15 +81,16 @@ cap_lease(uint32_t in, uint32_t cap)
 
 int
 lease_loop_run(const char *ifname, struct dhcp_lease *lease,
-    struct sc_publish *pub, uint32_t lease_cap_secs)
+    struct sc_publish *pub, uint32_t lease_cap_secs,
+    volatile sig_atomic_t *stop)
 {
 	uint32_t lease_secs = cap_lease(lease->lease_time, lease_cap_secs);
 	bool renew_marker_fired = false;
 
 	if (lease_secs == 0) {
 		xlog("zero lease time — treating as infinite (no renewal)");
-		while (!got_term)
-			(void)sleep(60);
+		while (!got_term && !(stop != NULL && *stop))
+			(void)sleep(1);
 		return (0);
 	}
 	if (lease_cap_secs > 0)
@@ -107,7 +114,7 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 		xlog("BOUND: lease=%us T1=+%us T2=+%us expiry=+%us",
 		    lease_secs, t1, t1 + t2_after_t1, lease_secs);
 
-		if (sleep_interruptible(t1) < 0)
+		if (sleep_interruptible(t1, stop) < 0)
 			return (0);
 
 		/* RENEWING. */
@@ -136,7 +143,7 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 		}
 		xlog("RENEWING: no ACK; waiting until T2");
 
-		if (sleep_interruptible(t2_after_t1) < 0)
+		if (sleep_interruptible(t2_after_t1, stop) < 0)
 			return (0);
 
 		/* REBINDING. */
@@ -162,7 +169,7 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 		}
 		xlog("REBINDING: no ACK; waiting until lease expiry");
 
-		if (sleep_interruptible(expiry_after_t2) < 0)
+		if (sleep_interruptible(expiry_after_t2, stop) < 0)
 			return (0);
 
 		xlog("lease expired without renewal — unpublishing");

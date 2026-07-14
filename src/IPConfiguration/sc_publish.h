@@ -70,9 +70,25 @@ int	sc_publish_dhcp(struct sc_publish *p, const char *ifname,
 	    const struct dhcp_lease *lease);
 
 /*
- * Remove the previously-published keys for `ifname`. Called on
- * lease loss (REBINDING also fails) so observers see the service
- * transition to "no v4".
+ * Elect the primary service and write State:/Network/Global/IPv4
+ * (PrimaryService + PrimaryInterface), or remove the key when nothing
+ * is bound.
+ *
+ * This key used to be set inline by sc_publish_ipv4() on every bind,
+ * making it last-binder-wins (#41) — on a laptop with em0 and wlan0 the
+ * "primary interface" was simply whichever raced to bind last, and both
+ * mDNSResponder and hostnamed consume it. The primary is now the
+ * highest-ranked bound interface (bound_state_primary(): wired beats
+ * wireless). Call after any bind or teardown, once bound_state is
+ * settled. Returns 0 on success.
+ */
+int	sc_publish_update_primary(struct sc_publish *p);
+
+/*
+ * Remove the previously-published keys for `ifname` (IPv4, DNS, IPv6,
+ * DHCP). Called on lease loss or teardown so observers see the service
+ * transition to "no v4". Does not re-elect the primary — the caller runs
+ * sc_publish_update_primary() once bound_state is updated.
  */
 int	sc_publish_remove(struct sc_publish *p, const char *ifname);
 

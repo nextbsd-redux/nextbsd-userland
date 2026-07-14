@@ -11,6 +11,7 @@
  * daemon stays plain-C / plain-Apple-headers.
  */
 #include "sc_publish.h"
+#include "bound_state.h"	/* primary election (#41) */
 
 #include <SystemConfiguration/SCDynamicStore.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -227,43 +228,20 @@ sc_publish_ipv4(struct sc_publish *p, const char *ifname,
 		return (-1);
 	}
 
-	/* State:/Network/Global/IPv4 — PrimaryService + PrimaryInterface.
-	 * Set whenever ANY service binds, since CI runs single-NIC; a
-	 * future cross-cutting fix selects the actual primary from a
-	 * preferences-driven service order (Apple's IPMonitor does this).
-	 * Apple's set-hostname.c (in hostnamed once vendored) reads this
-	 * key to pick the service whose DHCP entity it should consult.
-	 * mDNSResponder (#62) reads it to pick the interface for default-
-	 * route mDNS. */
-	{
-		CFMutableDictionaryRef gdict;
-		CFStringRef gkey, gk_svc, gk_iface, svc_uuid;
-
-		gdict = CFDictionaryCreateMutable(NULL, 0,
-		    &kCFTypeDictionaryKeyCallBacks,
-		    &kCFTypeDictionaryValueCallBacks);
-		gkey = mkstr("State:/Network/Global/IPv4");
-		gk_svc = mkstr("PrimaryService");
-		gk_iface = mkstr("PrimaryInterface");
-		svc_uuid = make_service_uuid(ifname);
-		iface_str = mkstr(ifname);
-		if (gdict != NULL && gkey != NULL && gk_svc != NULL &&
-		    gk_iface != NULL && svc_uuid != NULL &&
-		    iface_str != NULL) {
-			CFDictionarySetValue(gdict, gk_svc, svc_uuid);
-			CFDictionarySetValue(gdict, gk_iface, iface_str);
-			if (!SCDynamicStoreSetValue(p->store, gkey, gdict))
-				xlog("SCDynamicStoreSetValue("
-				    "State:/Network/Global/IPv4) failed: %s",
-				    SCErrorString(SCError()));
-		}
-		if (iface_str != NULL) CFRelease(iface_str);
-		if (svc_uuid != NULL) CFRelease(svc_uuid);
-		if (gk_iface != NULL) CFRelease(gk_iface);
-		if (gk_svc != NULL) CFRelease(gk_svc);
-		if (gkey != NULL) CFRelease(gkey);
-		if (gdict != NULL) CFRelease(gdict);
-	}
+	/*
+	 * State:/Network/Global/IPv4 is NOT written here any more. This
+	 * used to set PrimaryService/PrimaryInterface to whichever service
+	 * had just bound — last-binder-wins (#41). Single-NIC CI never
+	 * noticed, but on a laptop with em0 and wlan0 "primary" became a
+	 * race, and both mDNSResponder (#62) and hostnamed consume that key,
+	 * so a wrong answer propagates into Bonjour and hostname resolution.
+	 *
+	 * The election now lives in sc_publish_update_primary(), which asks
+	 * bound_state for the highest-ranked *currently bound* interface. The
+	 * caller runs it after any bind or teardown, once bound_state is
+	 * settled — which is also why it cannot happen inline here: at this
+	 * point the caller may not have recorded the binding yet.
+	 */
 
 	/* DNS — optional, only if the lease carried DNS option 6. */
 	if (lease->dns_count > 0) {
@@ -472,6 +450,78 @@ sc_publish_ipv6(struct sc_publish *p, const char *ifname,
 	return (0);
 }
 
+/*
+ * Elect the primary service and write State:/Network/Global/IPv4 (#41).
+ *
+ * The primary is the highest-ranked *currently bound* interface — wired
+ * beats wireless (bound_state_primary()) — not, as before, whichever one
+ * happened to bind most recently. Run this after any bind or teardown,
+ * once bound_state reflects reality.
+ *
+ * When nothing is bound the key is removed rather than left stale: a
+ * consumer that reads PrimaryInterface must not be told em0 is primary
+ * when em0 no longer has a lease. mDNSResponder (#62) and hostnamed both
+ * read this key.
+ */
+int
+sc_publish_update_primary(struct sc_publish *p)
+{
+	CFMutableDictionaryRef gdict;
+	CFStringRef gkey, gk_svc, gk_iface, svc_uuid, iface_str;
+	char primary[IF_NAMESIZE];
+	int rc = -1;
+
+	if (p == NULL || p->store == NULL)
+		return (-1);
+
+	gkey = mkstr("State:/Network/Global/IPv4");
+	if (gkey == NULL)
+		return (-1);
+
+	if (!bound_state_primary(primary, sizeof(primary))) {
+		if (!SCDynamicStoreRemoveValue(p->store, gkey)) {
+			/* Not an error when the key was never set. */
+			xlog("no bound interface; State:/Network/Global/IPv4 "
+			    "already absent");
+		} else {
+			xlog("no bound interface; cleared "
+			    "State:/Network/Global/IPv4");
+		}
+		CFRelease(gkey);
+		return (0);
+	}
+
+	gdict = CFDictionaryCreateMutable(NULL, 0,
+	    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	gk_svc = mkstr("PrimaryService");
+	gk_iface = mkstr("PrimaryInterface");
+	svc_uuid = make_service_uuid(primary);
+	iface_str = mkstr(primary);
+
+	if (gdict != NULL && gk_svc != NULL && gk_iface != NULL &&
+	    svc_uuid != NULL && iface_str != NULL) {
+		CFDictionarySetValue(gdict, gk_svc, svc_uuid);
+		CFDictionarySetValue(gdict, gk_iface, iface_str);
+		if (SCDynamicStoreSetValue(p->store, gkey, gdict)) {
+			xlog("primary interface: %s (rank %d, %d bound)",
+			    primary, iface_rank(primary), bound_state_count());
+			rc = 0;
+		} else {
+			xlog("SCDynamicStoreSetValue("
+			    "State:/Network/Global/IPv4) failed: %s",
+			    SCErrorString(SCError()));
+		}
+	}
+
+	if (iface_str != NULL) CFRelease(iface_str);
+	if (svc_uuid != NULL) CFRelease(svc_uuid);
+	if (gk_iface != NULL) CFRelease(gk_iface);
+	if (gk_svc != NULL) CFRelease(gk_svc);
+	if (gdict != NULL) CFRelease(gdict);
+	CFRelease(gkey);
+	return (rc);
+}
+
 int
 sc_publish_remove(struct sc_publish *p, const char *ifname)
 {
@@ -491,6 +541,10 @@ sc_publish_remove(struct sc_publish *p, const char *ifname)
 	CFRelease(key);
 
 	key = make_key(ifname, "IPv6");
+	(void)SCDynamicStoreRemoveValue(p->store, key);
+	CFRelease(key);
+
+	key = make_key(ifname, "DHCP");
 	(void)SCDynamicStoreRemoveValue(p->store, key);
 	CFRelease(key);
 

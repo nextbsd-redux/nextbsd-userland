@@ -1,13 +1,24 @@
 /*
- * apply_lease.h — apply a DHCPv4 lease to an interface.
+ * apply_lease.h — install / remove a DHCPv4 lease on an interface.
  *
- * Given a bound lease (yiaddr/netmask/router/dns from a DHCPACK),
- * configure the interface address via SIOCAIFADDR, install the
- * default route via the PF_ROUTE socket, and (best-effort) write
- * the DNS servers to /etc/resolv.conf. iter 3 — straight ioctl /
- * routing-message plumbing; iter 4 replaces the resolv.conf write
- * with a `State:/Network/Service/<UUID>/IPv4` + `/DNS` publish via
- * libSystemConfiguration, and adds RTM_DELETE on lease loss.
+ * apply_lease() configures the interface address via SIOCAIFADDR and
+ * installs the default route via the PF_ROUTE socket.
+ *
+ * deconfigure_lease() is its inverse, and it did not exist (#39). The
+ * daemon installed an address and a default route and then never took
+ * them back — not on link-down, not on lease expiry, not on interface
+ * removal. Walk out of WLAN range and a dead IP plus a dead default
+ * route stayed installed, silently blackholing traffic. There was no
+ * SIOCDIFADDR and no RTM_DELETE anywhere in the tree.
+ *
+ * DNS is deliberately NOT handled per-interface. /etc/resolv.conf is
+ * global state, so a per-interface writer means last-to-bind wins —
+ * wlan0 would clobber the DNS of a wired em0 that outranks it.
+ * resolv_conf_sync() instead regenerates the file from whichever
+ * interface currently holds primary (bound_state_primary(), #41), and
+ * is called after any bind or teardown. It also writes atomically
+ * (temp + fsync + rename); the old in-place fopen("w") could be read
+ * half-written.
  */
 #ifndef _IPCFG_APPLY_LEASE_H_
 #define _IPCFG_APPLY_LEASE_H_
@@ -15,11 +26,32 @@
 #include "dhcp_packet.h"
 
 /*
- * Apply `lease` to `ifname`. Returns 0 on full success, non-zero
- * on any sub-step failure (the failing step is xlog'd). On failure
- * the partial configuration is left in place — iter 3 is an
- * "install once and stop" path; lease-loss rollback is iter 4+.
+ * Apply `lease` to `ifname`: SIOCAIFADDR + default route, plus an
+ * RFC 5227 §2.3 gratuitous-ARP announce (best-effort). Returns 0 on
+ * full success, non-zero if a sub-step failed (the failing step is
+ * logged). Does not touch /etc/resolv.conf — call resolv_conf_sync()
+ * once the binding is recorded in bound_state.
  */
 int	apply_lease(const char *ifname, const struct dhcp_lease *lease);
+
+/*
+ * Remove `lease` from `ifname`: SIOCDIFADDR + RTM_DELETE of the default
+ * route via lease->router. Best-effort and idempotent — a missing
+ * address or route is NOT an error, because teardown races link-down:
+ * when an interface goes away the kernel may already have dropped both.
+ * Returns 0 if the interface ends up clean, non-zero only on an
+ * unexpected failure.
+ */
+int	deconfigure_lease(const char *ifname, const struct dhcp_lease *lease);
+
+/*
+ * Regenerate /etc/resolv.conf from the DNS servers of whichever
+ * interface is currently primary (bound_state_primary()). Writes
+ * atomically. When nothing is bound the file is left alone rather than
+ * emptied: a box with no lease is better off keeping its last known
+ * resolvers than having none, and a static resolv.conf shipped in the
+ * image is not ours to delete.
+ */
+void	resolv_conf_sync(void);
 
 #endif /* _IPCFG_APPLY_LEASE_H_ */
