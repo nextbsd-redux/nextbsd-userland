@@ -1,0 +1,214 @@
+.\" wland(8) — NextBSD 802.11 management daemon.
+.\"
+.\" NextBSD-original. There is no upstream page to vendor: Apple's counterpart
+.\" (wifid) is closed source and undocumented.
+.\"
+.Dd July 14, 2026
+.Dt WLAND 8
+.Os NextBSD
+.Sh NAME
+.Nm wland
+.Nd 802.11 management daemon
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+owns 802.11 on NextBSD.
+It is started by
+.Xr launchd 8
+as
+.Ql org.nextbsd.wland
+and is not intended to be run by hand.
+Use
+.Xr wlan 8
+to talk to it.
+.Pp
+It exists because two things on the path from
+.Dq Intel card
+to
+.Dq IP address
+had no owner at all:
+.Bl -enum
+.It
+.Sy Nothing created the VAP .
+On FreeBSD an 802.11 driver does not present a usable interface \(em you must
+clone a Virtual AP off the PHY, which
+.Xr rc.conf 5
+normally does with
+.Ql wlans_iwlwifi0="wlan0" .
+NextBSD has no
+.Xr rc.conf 5
+and no
+.Pa /etc/rc.d ,
+and never will:
+.Xr launchd 8
+is PID 1.
+So
+.Ql ifconfig wlan0 create wlandev iwlwifi0
+had nobody to run it.
+.Nm
+does, natively
+.Pq Dv SIOCIFCREATE2 ,
+with a wildcard name so the kernel assigns the unit.
+On restart it adopts the VAP it created last time rather than cloning a second
+one.
+.It
+.Sy Nothing published an association-complete signal .
+net80211 reports the link UP at
+.Em association ,
+which is
+.Em before
+the WPA 4-way handshake.
+.Xr ipconfigd 8
+would fire DHCP onto an unauthenticated port, have every packet dropped, burn
+its ~28-second retransmit ladder, and then never retry \(em because the link is
+.Em already
+Active, so no new event ever arrives.
+.El
+.Pp
+.Nm
+therefore publishes
+.Ql State:/Network/Interface/<if>/AirPort
+carrying
+.Ql Authenticated , SSID , BSSID , RSSI , Channel ,
+and
+.Ql Security .
+.Xr ipconfigd 8
+requires
+.Ql Link{Active}
+.Sy and
+.Ql AirPort{Authenticated}
+before it will send a DHCPDISCOVER.
+An interface with
+.Em no
+AirPort key is treated as ready, which is what keeps every wired NIC behaving
+exactly as it did before.
+.Sh ARCHITECTURE
+.Bd -literal -offset indent
+wland ──(wpa_ctrl socket)──▶ stock wpa_supplicant (from base)
+      ──(SCDynamicStore)───▶ configd  ──▶ ipconfigd's DHCP gate
+      ──(SCPreferences)────▶ known networks
+      ──(MIG org.nextbsd.wlan)──▶ wlan(8) ──▶ Gershwin
+.Ed
+.Pp
+.Xr wpa_supplicant 8
+is
+.Sy stock ,
+from FreeBSD base: not vendored, not patched, not taught Mach, and not the
+.Pa security/wpa_supplicant
+port.
+It speaks net80211 ioctls downward and a UNIX control socket upward, and does
+not know configd exists.
+All Mach knowledge lives in
+.Nm .
+Keeping the supplicant stock means a security fix is a base rebuild rather than
+a merge against local patches forever.
+.Pp
+.Nm
+spawns
+.Xr wpa_supplicant 8
+itself \(em
+.Xr launchd 8
+cannot, because it needs
+.Ql -i wlan0
+and
+.Li wlan0
+does not exist until
+.Nm
+creates it.
+It is spawned with an
+.Sy empty
+configuration and
+.Ql update_config=0 ,
+and every network is injected at runtime over the control socket.
+.Pp
+This matters:
+.Nm
+is the
+.Sy sole author
+of
+.Xr wpa_supplicant 8 Ns 's
+network blocks.
+If the configuration file also carried SSIDs, the supplicant's own autojoin and
+.Nm Ns 's
+autojoin would both be choosing networks \(em two brains, fighting.
+That is the classic NetworkManager failure mode, and it produces exactly the
+behaviour users hate: the machine keeps rejoining the wrong network and nothing
+you click stops it.
+.Sh AUTOJOIN
+.Nm
+picks the strongest remembered, autojoin-enabled network currently in range.
+.Xr wpa_supplicant 8
+cannot do this: it offers only a
+.Ql priority
+integer, which cannot express
+.Dq prefer whichever of my known networks I can actually hear best right now .
+.Sh KNOWN NETWORKS AND PASSPHRASE STORAGE
+Remembered networks live in a root-owned
+.Pa preferences.plist
+under
+.Pa /Local/Library/Preferences/SystemConfiguration ,
+written through SCPreferences (atomic commit and locking come free).
+.Pp
+.Sy Passphrases are stored in plaintext .
+This is not a design preference.
+NextBSD has no keychain \(em it is not started and not planned \(em so WLAN
+passphrases are plaintext on disk whichever path is taken.
+The only real choice is
+.Em which
+plaintext file, and this one keeps
+.Nm
+the sole author of the supplicant's network blocks.
+The file is mode 0600 and root-owned.
+If a keychain lands, this is the one thing that changes.
+.Sh FILES
+.Bl -tag -width "/Local/Library/Preferences/SystemConfiguration/org.nextbsd.wland.plist" -compact
+.It Pa /usr/sbin/wland
+The daemon.
+.It Pa /System/Library/LaunchDaemons/org.nextbsd.wland.plist
+.Xr launchd 8
+job.
+.It Pa /var/log/wland.stderr
+Log.
+.It Pa /var/run/wland/wpa-<if>.conf
+The deliberately empty
+.Xr wpa_supplicant 8
+config.
+.Sy Never add networks here .
+.It Pa /var/run/wpa_supplicant/<if>
+The supplicant's control socket.
+.It Pa /Local/Library/Preferences/SystemConfiguration/org.nextbsd.wland.plist
+Known networks (plaintext passphrases).
+.El
+.Sh SEE ALSO
+.Xr configd 8 ,
+.Xr ipconfigd 8 ,
+.Xr launchd 8 ,
+.Xr wlan 8 ,
+.Xr wpa_supplicant 8
+.Pp
+.Lk https://pkgdemon.github.io/nextbsd-wlan-plan.html "The NextBSD WLAN plan"
+.Sh HISTORY
+.Nm
+first appeared in NextBSD in 2026.
+It is a NextBSD original.
+Apple's counterpart,
+.Ql wifid ,
+is closed source; the only piece Apple ever published
+.Pq Ql eapolclient
+performs the EAP exchange and nothing else \(em no scanning, no association, no
+4-way handshake \(em so there was no seed to build from.
+.Sh CAVEATS
+802.11 is amd64-only.
+arm64
+.Dv GENERIC
+never sets
+.Ql device wlan ,
+so the entire net80211 stack is absent from that kernel and
+.Nm
+will find no radios.
+.Pp
+WPA-Enterprise (802.1X) is not implemented.
+It would come from
+.Xr wpa_supplicant 8 Ns 's
+own EAP stack, or not at all.

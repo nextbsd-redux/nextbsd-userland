@@ -13,10 +13,12 @@
 # Install: make DESTDIR=/path/to/rootfs install
 
 PROG=		wland
-# MAN= (empty) suppresses bsd.prog.mk's default wland.1 rule — NO_MAN=yes alone
-# is insufficient, the rule still references it. Same suppression configd /
-# ipconfigd use.
-MAN=
+# Both pages are NextBSD-originals — there is no upstream to vendor (Apple's
+# wifid is closed and undocumented). bsd.prog.mk gzips + installs them into
+# MANDIR. wlan.8 is listed here even though the wlan CLI is hand-linked by
+# build-userland.sh: MAN= installs the pages, independently of which binary
+# bsd.prog.mk built.
+MAN=		wland.8 wlan.8
 SRCS=		wland.c vap.c wpa_ctrl.c supplicant.c
 SRCS+=		airport.c mach_service.c wland_mig.c
 
@@ -43,7 +45,6 @@ CFLAGS+=			-Wno-macro-redefined
 # -Wsystem-headers -Werror, which promotes warnings inside the vendored CF
 # headers into hard errors. Same carry ipconfigd / libSystemConfiguration use.
 WARNS=		0
-NO_MAN=		yes
 
 CFLAGS+=	-O2 -pipe -fblocks
 CFLAGS+=	-Wall -Wextra -Wshadow -Wstrict-prototypes
