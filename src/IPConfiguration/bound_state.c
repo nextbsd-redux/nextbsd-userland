@@ -20,10 +20,17 @@ struct bound_entry {
 	struct dhcp_lease	lease;
 };
 
+/*
+ * Designated initializer: only the mutex needs a value. Spelling a
+ * struct dhcp_lease out positionally means this warns (and eventually breaks)
+ * every time that struct gains a field — which is exactly what
+ * -Wmissing-field-initializers caught. Static storage zero-fills the rest,
+ * which is the same "nothing is bound" state bound_state_init() establishes.
+ */
 static struct {
 	pthread_mutex_t		lock;
 	struct bound_entry	e[BOUND_MAX_IF];
-} g_bound = { PTHREAD_MUTEX_INITIALIZER, { { false, "", { {0}, {0}, {0}, {0}, 0, {{0}}, 0 } } } };
+} g_bound = { .lock = PTHREAD_MUTEX_INITIALIZER };
 
 /* Caller holds the lock. Returns the slot for `ifname`, or NULL. */
 static struct bound_entry *
