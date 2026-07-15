@@ -282,6 +282,20 @@ spawn_supplicant(const char *vap)
 }
 
 /*
+ * Ensure the runtime directories exist. Called on every bring-up attempt, not
+ * only at startup, because launchd can start wland before /var/run is populated
+ * on a fresh boot; a one-shot mkdir then races and fails silently. mkdir(2)
+ * returning EEXIST is exactly the state we want, so the results are ignored.
+ */
+static void
+ensure_run_dirs(void)
+{
+	(void)mkdir("/var/run", 0755);		/* parent may also be late at boot */
+	(void)mkdir(WLAND_RUN_DIR, 0700);
+	(void)mkdir(WPA_CTRL_DIR, 0700);
+}
+
+/*
  * Bring one radio all the way up: clone the VAP, admin-up, spawn
  * wpa_supplicant, attach to its control socket.
  */
@@ -290,6 +304,17 @@ bring_up_phy(struct wlan_if *w, const char *phy)
 {
 	char vap[IF_NAMESIZE];
 	int tries;
+
+	/*
+	 * Make sure the runtime dirs exist NOW, on every attempt — not just once
+	 * at startup. On a fresh boot launchd can start wland before /var/run is
+	 * ready, so the startup mkdir races and fails silently, and every
+	 * write_wpa_conf() below would then fail forever with ENOENT while the VAP
+	 * sits created-but-supplicant-less (ifconfig shows wlan0, but wland never
+	 * marks it active, so the `wlan` CLI reports no interfaces). Re-creating
+	 * here lets the next rescan retry self-heal once /var/run appears.
+	 */
+	ensure_run_dirs();
 
 	if (vap_create(phy, vap, sizeof(vap)) != 0)
 		return (false);
@@ -467,8 +492,9 @@ main(int argc, char **argv)
 	/* Do not die when a wpa_supplicant we spawned exits. */
 	(void)signal(SIGPIPE, SIG_IGN);
 
-	(void)mkdir(WLAND_RUN_DIR, 0700);
-	(void)mkdir(WPA_CTRL_DIR, 0700);
+	/* Best-effort at startup; bring_up_phy() re-creates these on every retry
+	 * so a /var/run that is not ready this early does not wedge us forever. */
+	ensure_run_dirs();
 
 	/*
 	 * The Mach service comes up FIRST, before any radio work. A client that
