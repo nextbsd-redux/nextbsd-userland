@@ -33,13 +33,24 @@ struct wlan_phy {
 #define	WLAN_MAX_PHY	4
 
 /*
+ * Sentinel returned by vap_enumerate_phys when net80211 is not in the kernel at
+ * all — the net.wlan.devices sysctl node is absent (ENOENT). This is PERMANENT
+ * (e.g. arm64 GENERIC never sets `device wlan`), so a caller that polls for a
+ * radio to appear should stop polling on this value. It is deliberately distinct
+ * from 0, which means "the node exists but lists no radios *yet*" — a driver may
+ * still be attaching, so the caller should keep watching.
+ */
+#define	VAP_NO_NET80211	(-2)
+
+/*
  * Enumerate the 802.11 PHYs the kernel knows about, via the net.wlan.devices
  * sysctl — a space-separated list of ieee80211com names. This is the only
  * reliable way to find them: a PHY is not an ifnet, so it does not appear in
  * getifaddrs at all.
  *
  * Fills up to `max` entries with the phy name and an EMPTY vap name. Returns the
- * count, or -1 on failure.
+ * count (>= 0), VAP_NO_NET80211 if net80211 is absent from the kernel, or -1 on
+ * a transient failure.
  */
 int	vap_enumerate_phys(struct wlan_phy *out, size_t max);
 
