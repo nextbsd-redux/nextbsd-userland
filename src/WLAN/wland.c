@@ -90,6 +90,14 @@ static struct airport	*g_air;
 /* How often to retry an autojoin scan when nothing is connected. */
 #define	AUTOJOIN_INTERVAL_SEC	15
 
+/*
+ * How often to re-scan net.wlan.devices for a radio that showed up after we
+ * started. The 802.11 driver commonly finishes attaching several seconds into
+ * boot — AFTER launchd has already started wland — so a one-shot enumeration at
+ * startup races it and leaves the machine with no wlan0. See adopt_phys().
+ */
+#define	PHY_RESCAN_INTERVAL_SEC	2
+
 static void
 xlog(const char *fmt, ...)
 {
@@ -166,6 +174,32 @@ wland_if_by_name_locked(const char *vap)
 		return (NULL);
 	for (i = 0; i < WLAN_MAX_PHY; i++) {
 		if (g_ifs[i].active && strcmp(g_ifs[i].vap, vap) == 0)
+			return (&g_ifs[i]);
+	}
+	return (NULL);
+}
+
+/* Slot currently managing PHY `phy` ("iwlwifi0"), or NULL. Caller holds lock. */
+static struct wlan_if *
+if_by_phy_locked(const char *phy)
+{
+	int i;
+
+	for (i = 0; i < WLAN_MAX_PHY; i++) {
+		if (g_ifs[i].active && strcmp(g_ifs[i].phy, phy) == 0)
+			return (&g_ifs[i]);
+	}
+	return (NULL);
+}
+
+/* First unused table slot, or NULL if the table is full. Caller holds lock. */
+static struct wlan_if *
+if_free_slot_locked(void)
+{
+	int i;
+
+	for (i = 0; i < WLAN_MAX_PHY; i++) {
+		if (!g_ifs[i].active)
 			return (&g_ifs[i]);
 	}
 	return (NULL);
@@ -285,6 +319,18 @@ bring_up_phy(struct wlan_if *w, const char *phy)
 	if (w->supp == NULL) {
 		xlog("%s: wpa_supplicant never opened its control socket",
 		    vap);
+		/*
+		 * Reap the child we spawned before giving up. bring_up_phy is
+		 * now retried from the event loop's PHY rescan, so a failure
+		 * that left a live wpa_supplicant behind would leak one per
+		 * retry. The VAP itself is left intact — the retry adopts it via
+		 * vap_find_existing() rather than cloning a second one.
+		 */
+		if (w->supplicant_pid > 0) {
+			(void)kill(w->supplicant_pid, SIGTERM);
+			(void)waitpid(w->supplicant_pid, NULL, 0);
+			w->supplicant_pid = -1;
+		}
 		return (false);
 	}
 
@@ -347,13 +393,65 @@ try_autojoin(struct wlan_if *w)
 	(void)supplicant_connect(w->supp, kn.ssid, kn.psk);
 }
 
+/*
+ * Bring up every radio in net.wlan.devices we are not already managing. Called
+ * once at startup AND on a timer from the event loop.
+ *
+ * The rescan is the whole point: the 802.11 driver often finishes attaching
+ * AFTER launchd has started wland (the iwlwifi LinuxKPI port spends several
+ * seconds loading firmware), and a PHY is not an ifnet so there is no
+ * RTM_IFANNOUNCE and no launchd ordering that can make us wait for it.
+ * Enumerating only at startup therefore raced the driver and left the box with
+ * no wlan0. Re-scanning closes the race and, as a bonus, adopts a USB radio
+ * hot-plugged later. Idempotent: a radio already in the table is skipped.
+ *
+ * (Radio *removal* is intentionally not handled — a hot-unplug leaves a stale
+ * slot until wland restarts. That is a separate concern from the boot race.)
+ *
+ * Returns vap_enumerate_phys()'s value, so the caller can stop polling when
+ * net80211 is not in the kernel at all (VAP_NO_NET80211).
+ */
+static int
+adopt_phys(void)
+{
+	struct wlan_phy phys[WLAN_MAX_PHY];
+	int nphys, i;
+
+	nphys = vap_enumerate_phys(phys, WLAN_MAX_PHY);
+	if (nphys <= 0)
+		return (nphys);
+
+	for (i = 0; i < nphys; i++) {
+		struct wlan_if *w;
+
+		wland_lock();
+		if (if_by_phy_locked(phys[i].phy) != NULL) {
+			wland_unlock();			/* already ours */
+			continue;
+		}
+		w = if_free_slot_locked();
+		if (w == NULL) {
+			wland_unlock();
+			xlog("radio table full (%d) — ignoring %s",
+			    WLAN_MAX_PHY, phys[i].phy);
+			continue;
+		}
+		xlog("found 802.11 PHY: %s", phys[i].phy);
+		if (!bring_up_phy(w, phys[i].phy))
+			xlog("%s: could not bring up (will retry)", phys[i].phy);
+		wland_unlock();
+	}
+	return (nphys);
+}
+
 int
 main(int argc, char **argv)
 {
 	struct sigaction sa;
-	struct wlan_phy phys[WLAN_MAX_PHY];
 	time_t last_autojoin = 0;
-	int nphys, i;
+	time_t last_rescan = 0;
+	bool phy_watch;
+	int i;
 
 	(void)argc;
 	(void)argv;
@@ -390,17 +488,25 @@ main(int argc, char **argv)
 	if (g_air == NULL)
 		xlog("configd not reachable yet — will retry on first publish");
 
-	nphys = vap_enumerate_phys(phys, WLAN_MAX_PHY);
-	if (nphys <= 0) {
-		xlog("no 802.11 radios found — idling");
-	} else {
-		for (i = 0; i < nphys; i++) {
-			xlog("found 802.11 PHY: %s", phys[i].phy);
-			wland_lock();
-			if (!bring_up_phy(&g_ifs[i], phys[i].phy))
-				xlog("%s: could not bring up", phys[i].phy);
-			wland_unlock();
-		}
+	/*
+	 * Bring up whatever radios exist right now. On a cold boot there usually
+	 * are none yet — the driver is still attaching — so this commonly finds
+	 * nothing, and the event loop's periodic rescan is what actually adopts
+	 * the radio a few seconds later. phy_watch stays true as long as there is
+	 * a net80211 kernel to watch; it goes false only if net80211 is absent
+	 * entirely (arm64), so we do not spin re-reading a sysctl that will never
+	 * exist.
+	 */
+	phy_watch = (adopt_phys() != VAP_NO_NET80211);
+	if (phy_watch) {
+		int have;
+
+		wland_lock();
+		have = wland_if_count_locked();
+		wland_unlock();
+		if (have == 0)
+			xlog("no 802.11 radios up yet — watching "
+			    "net.wlan.devices");
 	}
 
 	/*
@@ -477,6 +583,19 @@ main(int argc, char **argv)
 					try_autojoin(&g_ifs[i]);
 			}
 			wland_unlock();
+		}
+
+		/*
+		 * Adopt a radio that appeared after we started (the boot race),
+		 * or one hot-plugged since. adopt_phys() does its own locking, so
+		 * it must be called with no lock held. Stop once we learn there is
+		 * no net80211 in this kernel at all — nothing will ever appear.
+		 */
+		if (phy_watch &&
+		    now - last_rescan >= PHY_RESCAN_INTERVAL_SEC) {
+			last_rescan = now;
+			if (adopt_phys() == VAP_NO_NET80211)
+				phy_watch = false;
 		}
 	}
 

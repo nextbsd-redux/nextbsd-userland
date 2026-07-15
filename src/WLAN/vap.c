@@ -61,7 +61,7 @@ vap_enumerate_phys(struct wlan_phy *out, size_t max)
 		if (errno == ENOENT) {
 			xlog("net.wlan.devices absent — no net80211 in this "
 			    "kernel; nothing to do");
-			return (0);
+			return (VAP_NO_NET80211);
 		}
 		xlog("sysctlbyname(net.wlan.devices) size: %s", strerror(errno));
 		return (-1);
