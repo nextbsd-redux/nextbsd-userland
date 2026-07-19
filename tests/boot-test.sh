@@ -1362,15 +1362,48 @@ send "/usr/tests/nextbsd-iokit/run.sh\r"
         timeout             { puts "\nWARN: IOKit tests did not finish in 180s (informational)" }
     }
 
-set timeout 60
+set timeout 150
 
-# Stage 4: clean halt so qemu exits 0 (the -no-reboot flag turns
-# halt -p into a clean shutdown rather than a reset loop).
-send "halt -p\r"
+# Stage 4: power off THROUGH launchd — `shutdown -p now` signals PID 1 with
+# SIGUSR2 per the BSD init(8) protocol, so this stage gates nextbsd#398 (the
+# pre-fix launchd treated SIGUSR2 as a debug-log toggle and the system stalled
+# forever after "System shutdown time has arrived"). Discriminators, because
+# -no-reboot makes qemu exit on EITHER outcome:
+#   "Powering system off" = RB_POWEROFF honored -> SHUTDOWN-P-OK
+#   "Rebooting"           = wrong reboot_flags (RB_AUTOBOOT) -> FAIL
+#   timeout               = the #398 stall -> FAIL (fall back to halt -p, which
+#                           bypasses init, so the runner is never left hanging)
+send "shutdown -p now\r"
 expect {
-    timeout { puts "\nWARN: halt didn't complete within timeout" }
-    "Uptime:" { puts "\nOK: clean halt" }
-    eof       { puts "\nOK: VM exited" }
+    timeout {
+        puts "\nFAIL: SHUTDOWN-P — no poweroff within 150s of shutdown -p (launchd init-protocol stall, nextbsd#398)"
+        send "\r"
+        sleep 1
+        send "halt -p\r"
+        expect { timeout {} eof {} "Uptime:" {} }
+        catch { close }
+        catch { wait }
+        exit 1
+    }
+    -re {Rebooting|rebooting} {
+        puts "\nFAIL: SHUTDOWN-P — system REBOOTED on shutdown -p (reboot_flags not honored, nextbsd#398)"
+        catch { close }
+        catch { wait }
+        exit 1
+    }
+    -re {Powering system off} {
+        puts "\nOK: SHUTDOWN-P-OK — launchd honored the init poweroff protocol (shutdown -p -> SIGUSR2 -> RB_HALT|RB_POWEROFF)"
+        expect {
+            timeout { puts "\nWARN: qemu did not exit after poweroff (informational)" }
+            eof     { puts "\nOK: VM exited after poweroff" }
+        }
+    }
+    eof {
+        # Poweroff paths without a console banner (e.g. arm64 PSCI) go
+        # straight to qemu exit. "Rebooting..." is always printed on the
+        # reboot path (kern_shutdown.c), so a silent exit here is a poweroff.
+        puts "\nOK: SHUTDOWN-P-OK — VM exited on shutdown -p (bannerless poweroff path)"
+    }
 }
 
 # A clean halt hits eof, which auto-closes the spawn — an explicit `close` then
