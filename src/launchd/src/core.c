@@ -4343,11 +4343,37 @@ jobmgr_callback(void *obj, struct kevent *kev)
 		    kev->ident, strsignal(kev->ident));
 		switch (kev->ident) {
 		case SIGTERM:
+			/* BSD init(8) says SIGTERM means "go to single-user"; there
+			 * is no single-user mode under launchd yet (nextbsd#398), so
+			 * an orderly reboot — the historical behavior — is the least
+			 * surprising action. */
 			jobmgr_log(jm, LOG_DEBUG, "Got SIGTERM. Shutting down.");
+			root_jobmgr->reboot_flags = RB_AUTOBOOT;
+			return launchd_shutdown();
+		case SIGINT:
+			/* BSD init(8) protocol: reboot (shutdown -r / reboot(8)). */
+			jobmgr_log(jm, LOG_NOTICE | LOG_CONSOLE, "Got SIGINT (init protocol: reboot). Shutting down.");
+			root_jobmgr->reboot_flags = RB_AUTOBOOT;
 			return launchd_shutdown();
 		case SIGUSR1:
+			if (pid1_magic) {
+				/* BSD init(8) protocol: halt (shutdown -h). Apple used
+				 * PID 1's SIGUSR1 as a calendar poke; that re-trigger is
+				 * now a direct call in calendarinterval_sanity_check(). */
+				jobmgr_log(jm, LOG_NOTICE | LOG_CONSOLE, "Got SIGUSR1 (init protocol: halt). Shutting down.");
+				root_jobmgr->reboot_flags = RB_HALT;
+				return launchd_shutdown();
+			}
 			return calendarinterval_callback();
 		case SIGUSR2:
+			if (pid1_magic) {
+				/* BSD init(8) protocol: halt + power off (shutdown -p).
+				 * Apple used PID 1's SIGUSR2 to enable debug logging;
+				 * that moved to SIGINFO. */
+				jobmgr_log(jm, LOG_NOTICE | LOG_CONSOLE, "Got SIGUSR2 (init protocol: poweroff). Shutting down.");
+				root_jobmgr->reboot_flags = RB_HALT | RB_POWEROFF;
+				return launchd_shutdown();
+			}
 			// Turn on all logging.
 			launchd_log_perf = true;
 			launchd_log_debug = true;
@@ -4356,7 +4382,22 @@ jobmgr_callback(void *obj, struct kevent *kev)
 			 * It's just a debugging facility.
 			 */
 			return jobmgr_log_perf_statistics(jm, false);
+#ifdef RB_POWERCYCLE
+		case SIGWINCH:
+			if (pid1_magic) {
+				/* BSD init(8) protocol: power cycle (shutdown -c). */
+				jobmgr_log(jm, LOG_NOTICE | LOG_CONSOLE, "Got SIGWINCH (init protocol: power-cycle). Shutting down.");
+				root_jobmgr->reboot_flags = RB_HALT | RB_POWERCYCLE;
+				return launchd_shutdown();
+			}
+			break;
+#endif
 		case SIGINFO:
+			/* Also absorb Apple's old SIGUSR2 log toggles — PID 1's
+			 * SIGUSR2 now belongs to the BSD shutdown protocol. */
+			launchd_log_perf = true;
+			launchd_log_debug = true;
+			launchd_log_shutdown = true;
 			return jobmgr_log_perf_statistics(jm, true);
 		default:
 			jobmgr_log(jm, LOG_ERR, "Unrecognized signal: %lu: %s", kev->ident, strsignal(kev->ident));
@@ -5896,7 +5937,10 @@ calendarinterval_sanity_check(void)
 	time_t now = time(NULL);
 
 	if (unlikely(ci && (ci->when_next < now))) {
-		(void)jobmgr_assumes_zero_p(root_jobmgr, raise(SIGUSR1));
+		/* Was raise(SIGUSR1) — but PID 1's SIGUSR1 is now the BSD init
+		 * halt request (nextbsd#398), and we already run in the kevent
+		 * loop, so re-trigger the missed alarm directly. */
+		calendarinterval_callback();
 	}
 }
 
@@ -7105,8 +7149,12 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 
 	if (!jm) {
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGINT, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR1, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR2, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+#ifdef RB_POWERCYCLE
+		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGWINCH, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+#endif
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGINFO, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
 	}
