@@ -63,7 +63,12 @@ jobs:
       #     dependency: userland is downstream of compat.
       - name: Stage sysroot from compat continuous
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # Public cross-repo READ (compat's `continuous` base asset) — needs no
+          # PAT. The built-in github.token authenticates gh for public reads and,
+          # unlike secrets.DISPATCH_TOKEN, is present on fork PRs (forks get a
+          # read-only github.token but never repo secrets). See #58 in
+          # nextbsd-kernel: the PAT stays only on the repository_dispatch step.
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$GITHUB_WORKSPACE/sysroot"
           gh release download continuous \
@@ -133,7 +138,14 @@ jobs:
       - name: Assemble disk.img (reuse staged base + built userland)
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          # This step only READS public `continuous` assets from sibling repos
+          # (kernel, kernel-modules) and the public nextbsd-overlays tarball, so
+          # it needs no PAT — the built-in github.token authenticates gh for
+          # public cross-repo reads. Using it (not secrets.DISPATCH_TOKEN) is
+          # what lets fork PRs build: forks never receive repo secrets, so
+          # DISPATCH_TOKEN was empty and `gh api` exited 4; forks DO get a
+          # read-only github.token. Mirrors nextbsd-kernel#58.
+          GH_TOKEN: ${{ github.token }}
           ARCH: ${{ inputs.arch }}
           BASE_TGZ: /tmp/base.tar.gz
           KERNEL_TGZ: ${{ github.workspace }}/art/nextbsd-kernel-${{ inputs.arch }}.tar.gz
