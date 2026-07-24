@@ -22,12 +22,19 @@
     problem and removes the need for the per-device wrapper script
     that the earlier two-plist approach used.
 
-  Why std.9600 (gettytab class):
-    Matches the exact string Apple uses. FreeBSD's /etc/gettytab
-    already ships this class (BSD-inherited). The class governs baud
-    rate, terminal type defaults (vt100 for std.* classes), and
-    parity. A user wanting a richer TERM (xterm-color, cons25) can
-    override after login.
+  Why 3wire.9600 (gettytab class), not Apple's std.9600 (#355):
+    Apple's plist says std.9600, but FreeBSD's std.* classes lack the
+    nc (no-carrier) capability, so getty never sets CLOCAL on the
+    console tty. When /dev/console is a serial UART without DCD
+    (qemu's pl011 on arm64/virt never asserts it; 3-wire serial on
+    real boards doesn't either), the post-login shell then hangs in
+    its job-control open("/dev/tty") inside ttydev_open, waiting for
+    carrier — banner prints, no prompt ever (nextbsd#355). 3wire.9600
+    is the BSD-inherited class for exactly this (nc -> CLOCAL); it is
+    what stock FreeBSD /etc/ttys uses for serial consoles. Same baud,
+    same vt100 default TERM; a user wanting a richer TERM can
+    override after login. On amd64 the bug is masked only because
+    qemu's 16550 always reports DCD.
 
   We keep using FreeBSD's /usr/libexec/getty for now (BSD-derived,
   works on /dev/console identically to Apple's getty). Porting
@@ -41,7 +48,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/libexec/getty</string>
-        <string>std.9600</string>
+        <string>3wire.9600</string>
         <string>console</string>
     </array>
     <key>RunAtLoad</key>

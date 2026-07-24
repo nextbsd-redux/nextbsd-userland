@@ -42,12 +42,12 @@ esac
 
 ARCH="${ARCH:-amd64}"
 # BOOT_GATE: full  = boot -> login -> run the on-image Mach/launchd/configd/etc
-#                    test suite (amd64).
-#            login = boot -> assert the login: prompt -> clean exit. Used for
-#                    arm64: it boots cleanly to login, but the post-login root
-#                    tcsh startup hangs on aarch64 (separate bug), so charging
-#                    into the shell just wastes the 8-min login timeout. Proving
-#                    boot->login is the meaningful arm64 smoke for now.
+#                    test suite (both arches since nextbsd#355 was fixed —
+#                    the arm64 post-login hang was getty's std.9600 class
+#                    leaving CLOCAL clear, so the shell's job-control
+#                    open(/dev/tty) waited forever for DCD on the pl011).
+#            login = boot -> assert the login: prompt -> clean exit. Kept as
+#                    an opt-in smoke gate for bring-up of new arches.
 BOOT_GATE="${BOOT_GATE:-full}"
 # BOOT_TRACE=1 turns on the mach.debug_enable + launchd_trace kenvs at the
 # loader. OFF by default (nextbsd#369): those trace points are kernel printf,
@@ -322,11 +322,9 @@ expect {
     "login:" { puts "\nOK: boot reached the login prompt" }
 }
 
-# BOOT_GATE=login: stop here. Reaching login: is the meaningful smoke for arm64
-# today — it boots cleanly through kernel + mach + launchd + all daemons + getty
-# to the login prompt; only the post-login root tcsh startup hangs on aarch64
-# (tracked separately). Charging into the shell would just burn the 8-min login
-# timeout, so exit cleanly with the boot proven. amd64 (BOOT_GATE=full) runs on.
+# BOOT_GATE=login: stop here — boot proven through kernel + mach + launchd +
+# all daemons + getty to the login prompt. Opt-in smoke gate for new-arch
+# bring-up; both current arches run BOOT_GATE=full.
 if {$env(BOOT_GATE) eq "login"} {
     puts "\nOK: BOOT-LOGIN-OK — $env(ARCH) reached the login prompt (login gate PASSED)"
     close
