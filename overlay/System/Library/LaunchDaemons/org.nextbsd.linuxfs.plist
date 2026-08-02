@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  org.nextbsd.linuxfs.plist
+
+  Mounts the filesystems the Linux ABI needs, at boot.
+
+  WHY org.nextbsd.* AND NOT com.apple.*
+
+  Same reasoning as org.nextbsd.wland: Apple ships no Linux ABI and therefore no
+  daemon this models, so a com.apple.* label would be fabricated. Nothing
+  Apple-derived looks this label up either.
+
+  WHY IT EXISTS AT ALL
+
+  On stock FreeBSD rc.d/linux does this. NextBSD has launchd as PID 1 and no
+  rc.d, and /etc/fstab is inert here because nothing runs `mount -a` — so the
+  Linux ABI compiled in by nextbsd-kernel#61 is present but unusable without it:
+
+    * empty /proc          -> Node/Bun abort at startup
+    * missing /dev/fd/N    -> Bun resolves its cwd via open(cwd, O_PATH) then
+                              readlink("/dev/fd/N"); devfs supplies only 0,1,2,
+                              so claude-code dies with
+                              "Can't access working directory ...: does not exist"
+                              (nextbsd-kernel#65 compiles in fdescfs; this mounts it)
+
+  RunAtLoad with KeepAlive FALSE: this is a one-shot, not a daemon. KeepAlive
+  true would respawn it in a tight loop forever once the mounts are done.
+
+  No launchd ordering exists in this port (no StartAfter/Requires, and the plist
+  directory scan is not sorted), so the script must tolerate running before a
+  Linux userland is installed — it exits 0 when /compat/linux is absent, and is
+  idempotent so it can simply be kickstarted again afterwards:
+
+      launchctl kickstart -k system/org.nextbsd.linuxfs
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.nextbsd.linuxfs</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/libexec/nextbsd-linuxfs</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/var/log/linuxfs.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/linuxfs.log</string>
+</dict>
+</plist>

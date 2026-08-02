@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# nextbsd-linuxfs -- mount the filesystems the Linux ABI needs.
+#
+# On stock FreeBSD this is rc.d/linux's job. NextBSD runs launchd as PID 1 with
+# no rc.d, and /etc/fstab is inert here (nothing ever runs `mount -a`), so
+# without this the Linux ABI is present but unusable:
+#
+#   * no /proc          -- Node/Bun abort immediately on an empty /proc
+#   * no /dev/fd/N      -- Bun resolves its cwd with open(cwd, O_PATH) followed
+#                          by readlink("/dev/fd/N"); devfs only supplies 0,1,2,
+#                          so this fails and claude-code exits with
+#                          "Can't access working directory ...: does not exist"
+#
+# Mirrors the set and the order rc.d/linux uses. Idempotent: safe to re-run, and
+# a no-op when no Linux runtime is installed.
+
+emul=$(sysctl -n compat.linux.emul_path 2>/dev/null) || emul=/compat/linux
+[ -n "$emul" ] || emul=/compat/linux
+
+# Nothing to do until a Linux userland exists.
+[ -d "$emul" ] || exit 0
+
+mounted() {
+	mount | grep -q " on $1 ("
+}
+
+do_mount() {
+	_type=$1; _dev=$2; _dir=$3; shift 3
+	[ -d "$_dir" ] || mkdir -p "$_dir" 2>/dev/null || return 0
+	mounted "$_dir" && return 0
+	mount -t "$_type" "$@" "$_dev" "$_dir" ||
+		echo "nextbsd-linuxfs: failed to mount $_type on $_dir" >&2
+}
+
+do_mount linprocfs linprocfs "$emul/proc"
+do_mount linsysfs  linsysfs  "$emul/sys"
+do_mount devfs     devfs     "$emul/dev"
+
+# fdescfs must come after devfs (devfs provides the fd directory), and linrdlnk
+# is required: it gives readlink(2) Linux semantics, which is the whole point.
+do_mount fdescfs fdesc "$emul/dev/fd" -o linrdlnk
+
+# /dev/shm inside the Linux devfs is created by linux_dev_shm_create() when the
+# ABI initialises, so this runs after devfs above.
+do_mount tmpfs tmpfs "$emul/dev/shm" -o mode=1777
+
+exit 0
