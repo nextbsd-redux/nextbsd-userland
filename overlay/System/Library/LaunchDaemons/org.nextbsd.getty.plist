@@ -1,16 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  com.apple.getty.plist
+  org.nextbsd.getty.plist
 
-  Apple-faithful single-plist getty service. Shape matches Apple's
+  Console getty service. Shape is modelled on Apple's
   /System/Library/LaunchDaemons/com.apple.getty.plist on macOS:
 
       ProgramArguments = ("/usr/libexec/getty", "std.9600", "console")
       KeepAlive = true
-      RunAtLoad = true (implicit in com.apple.getty; we set it
+      RunAtLoad = true (implicit in Apple's com.apple.getty; we set it
                        explicitly so first-boot fires getty without
                        waiting on an external trigger)
+
+  Why org.nextbsd.getty and not com.apple.getty:
+    The com.apple.* namespace is for services that mirror what Apple
+    actually ships. This one no longer does. Apple's com.apple.getty is
+    Disabled=true out of the box and its /etc/ttys hands `console` to
+    loginwindow — a stock Mac runs NO getty at all, on any tty; getty is
+    the opt-in fallback for console-mode boots. NextBSD has no
+    loginwindow, so it ships this job ENABLED, with FreeBSD's
+    /usr/libexec/getty and a FreeBSD gettytab class (3wire.9600, see
+    below), plus a companion framebuffer job Apple has no equivalent of
+    (org.nextbsd.getty.ttyv0). Behaviour, binary, class and topology all
+    diverge, so the label says NextBSD. Matches the precedent set by
+    org.nextbsd.wland.
+    Note for upgrades: the plists are package-owned, so pkg replaces the
+    old com.apple.getty.plist. A tree that somehow keeps both just ends
+    up with two gettys on one tty, which is harmless — the loser exits 0
+    immediately (measured; see org.nextbsd.getty.ttyv0.plist).
 
   Why /dev/console (not ttyu0 / ttyv0):
     On both Darwin and FreeBSD, /dev/console is a kernel-provided
@@ -21,7 +38,7 @@
     respawn-loop problem and removes the need for the per-device
     wrapper script that the earlier two-plist approach used.
 
-    CAVEAT (this is why com.apple.getty.ttyv0.plist exists): on a
+    CAVEAT (this is why org.nextbsd.getty.ttyv0.plist exists): on a
     dual-console boot the multiplexing covers kernel MESSAGES only.
     printf -> cnputc walks cn_devlist and writes to every attached
     console, but the console TTY is singular — cninit() ends with
@@ -31,7 +48,7 @@
     getty on one of them. On arm64 that one is always the UART, because
     the EFI loader publishes hw.uart.console from ACPI SPCR unbidden —
     leaving a machine with no serial cable attached with no reachable
-    login at all. See com.apple.getty.ttyv0.plist for the full analysis
+    login at all. See org.nextbsd.getty.ttyv0.plist for the full analysis
     and for why running both jobs is safe where they coincide.
 
   Why 3wire.9600 (gettytab class), not Apple's std.9600 (#355):
@@ -56,7 +73,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.apple.getty</string>
+    <string>org.nextbsd.getty</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/libexec/getty</string>

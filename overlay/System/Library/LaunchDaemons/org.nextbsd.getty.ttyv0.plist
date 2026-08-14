@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  com.apple.getty.ttyv0.plist
+  org.nextbsd.getty.ttyv0.plist
 
-  A login on the FRAMEBUFFER console, alongside com.apple.getty (which
+  A login on the FRAMEBUFFER console, alongside org.nextbsd.getty (which
   serves /dev/console).
 
   Why a second job at all — /dev/console is ONE device, not "both":
-    com.apple.getty.plist assumes /dev/console follows every active
+    org.nextbsd.getty.plist assumes /dev/console follows every active
     console, so a single job covers whatever the machine has. That is
     true of kernel MESSAGES: printf -> cnputc walks cn_devlist and
     writes to every attached console, which is what boot_multicons="YES"
@@ -40,7 +40,7 @@
     hang. nextbsd#355 is a different bug in the same daemon: it fixed
     the post-login shell hanging on that UART, not the missing login.
 
-  Why this is safe next to com.apple.getty on amd64:
+  Why this is safe next to org.nextbsd.getty on amd64:
     Where /dev/console IS ttyv0, both jobs target the same tty. Measured
     on the arm64 image (a device-named getty raced against the running
     console getty): the loser exits 0 immediately and silently — no
@@ -54,7 +54,7 @@
     no framebuffer, so vt(4) never attaches and /dev/ttyv0 is absent)
     fails, exits, and KeepAlive respawns it every ThrottleInterval
     forever — measured at 3 log lines per 30s, permanently. That is the
-    missing-device respawn loop com.apple.getty.plist's comment cites as
+    missing-device respawn loop org.nextbsd.getty.plist's comment cites as
     the reason it serves /dev/console instead. The `test -c` guard makes
     the job a silent no-op on such machines (measured: 0 lines in 35s)
     without reintroducing a per-device wrapper SCRIPT — the guard is one
@@ -70,7 +70,7 @@
   Why 3wire.9600 on a framebuffer tty:
     Carrier is irrelevant on vt(4) (it always asserts), so the nc
     capability that matters on a UART is merely harmless here. It is
-    used anyway for consistency with com.apple.getty, and because the
+    used anyway for consistency with org.nextbsd.getty, and because the
     curated /etc/gettytab has no Pc entry — the class stock FreeBSD
     /etc/ttys uses for ttyv* — so an unknown class would silently fall
     back to `default`. TERM is vt100, same as the console job.
@@ -83,7 +83,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.apple.getty.ttyv0</string>
+    <string>org.nextbsd.getty.ttyv0</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/sh</string>

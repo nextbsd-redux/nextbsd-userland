@@ -635,7 +635,7 @@ fi
 #   Iter 3: getconf (POSIX configuration query; gperf tables via the
 #           vendored fake-gperf.awk).
 #   Iter 4: getty (replaces FreeBSD-runtime /usr/libexec/getty; the
-#           Apple binary now serves the com.apple.getty plist on
+#           Apple binary now serves the org.nextbsd.getty plist on
 #           /dev/console — the existing BOOT-BANNER + "login:" stages
 #           in boot-test.sh exercise it implicitly).
 #   Iter 5: pwd_mkdb + passwd. Both replace FreeBSD-runtime binaries.
@@ -854,8 +854,8 @@ else
     fi
 fi
 
-# GETTY-TTYV0 — the framebuffer login (com.apple.getty.ttyv0).
-# com.apple.getty serves /dev/console, which binds to exactly ONE tty:
+# GETTY-TTYV0 — the framebuffer login (org.nextbsd.getty.ttyv0).
+# org.nextbsd.getty serves /dev/console, which binds to exactly ONE tty:
 # cninit() ends in cnselect(best_cn) -> ttyconsdev_select(). Kernel
 # MESSAGES fan out to every console (that is what boot_multicons buys),
 # the login does not. On arm64 the winner is always the UART, because
@@ -871,7 +871,7 @@ fi
 # makes the job a deliberate silent no-op there, so that is a SKIP and
 # not a failure.
 echo "==> getty on the framebuffer console (ttyv0)"
-if launchctl list 2>/dev/null | awk '$3 == "com.apple.getty.ttyv0" { found = 1 } END { exit !found }'; then
+if launchctl list 2>/dev/null | awk '$3 == "org.nextbsd.getty.ttyv0" { found = 1 } END { exit !found }'; then
     if [ -c /dev/ttyv0 ]; then
         ttyv0_owner=$(ps -A -o tty= -o command= 2>/dev/null | awk '$1 == "ttyv0" { $1 = ""; sub(/^ /, ""); print; exit }')
         if [ -n "$ttyv0_owner" ]; then
@@ -883,7 +883,7 @@ if launchctl list 2>/dev/null | awk '$3 == "com.apple.getty.ttyv0" { found = 1 }
         echo "GETTY-TTYV0-SKIP: no /dev/ttyv0 on this guest (no framebuffer); job is a no-op by design"
     fi
 else
-    echo "GETTY-TTYV0-FAIL: com.apple.getty.ttyv0 not loaded"
+    echo "GETTY-TTYV0-FAIL: org.nextbsd.getty.ttyv0 not loaded"
 fi
 
 # 10. ASL runtime smoke (Phase J). Task #41 move_member wire-up

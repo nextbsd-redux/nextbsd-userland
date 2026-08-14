@@ -596,11 +596,11 @@ expect {
     "LAUNCHCTL-LIST-OK" { puts "\nOK: launchctl list round-trips with launchd" }
 }
 
-# GETTY-TTYV0 — the framebuffer login. com.apple.getty serves /dev/console,
+# GETTY-TTYV0 — the framebuffer login. org.nextbsd.getty serves /dev/console,
 # which binds to exactly ONE tty (cnselect -> ttyconsdev_select); only kernel
 # MESSAGES fan out to every console. On arm64 the UART always wins that
 # selection (the EFI loader publishes hw.uart.console from ACPI SPCR on its
-# own), so com.apple.getty.ttyv0 is what gives a screen-only arm64 machine a
+# own), so org.nextbsd.getty.ttyv0 is what gives a screen-only arm64 machine a
 # reachable login. WARN on timeout: a published image built before that plist
 # landed simply doesn't emit the marker, and this stage must not fail it.
 # SKIP is expected on a guest with no framebuffer (qemu -machine virt with no
@@ -608,7 +608,7 @@ expect {
 # job's `test -c` guard makes it a deliberate no-op.
 expect {
     timeout {
-        puts "\nWARN: GETTY-TTYV0 marker not seen (image predates com.apple.getty.ttyv0 — informational)"
+        puts "\nWARN: GETTY-TTYV0 marker not seen (image predates org.nextbsd.getty.ttyv0 — informational)"
     }
     "GETTY-TTYV0-FAIL" {
         puts "\nFAIL: GETTY-TTYV0-FAIL — framebuffer console has no login"
