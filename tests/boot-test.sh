@@ -68,6 +68,10 @@ case "$ARCH" in
     MACHINE=q35
     # e1000 option ROM ships with qemu-system-x86; -nic is fine.
     NET_ARGS="-nic user,model=e1000"
+    # q35 always instantiates a VGA adapter (-display none suppresses only the
+    # HOST window, not the emulated device), so the guest already has a
+    # framebuffer -> efifb -> vt(4) -> /dev/ttyv0. Nothing to add.
+    VIDEO_ARGS=""
     TCG_CPU=qemu64
     FW_CANDIDATES="/usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd /usr/share/qemu/OVMF.fd"
     ;;
@@ -79,6 +83,15 @@ case "$ARCH" in
     # We never netboot, so disable the ROM with romfile= (empty). Use the
     # -netdev/-device form since -nic doesn't take romfile.
     NET_ARGS="-netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile="
+    # `virt` instantiates NO display adapter at all, unlike q35. Without one the
+    # firmware exposes no GOP, the loader hands the kernel no framebuffer, vt(4)
+    # never attaches, and /dev/ttyv0 does not exist — so the console-on-screen
+    # path went untested on the one arch where it actually broke (#55: no login
+    # on the arm64 framebuffer, found only by booting a published image in UTM,
+    # never by CI). Give the guest a GPU so the tested machine matches the
+    # machines users run. Free under -display none: the device is emulated
+    # either way, only the host-side window is suppressed.
+    VIDEO_ARGS="-device virtio-gpu-pci"
     TCG_CPU=max
     FW_CANDIDATES="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/edk2/aarch64/QEMU_EFI.fd"
     ;;
@@ -109,7 +122,7 @@ if [ -z "$FW" ]; then
 fi
 echo "==> firmware: $FW | qemu: $QEMU -machine $MACHINE | net: $NET_ARGS"
 
-export ARCH BOOT_GATE BOOT_TRACE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS
+export ARCH BOOT_GATE BOOT_TRACE ACCEL_FLAGS FW QEMU MACHINE NET_ARGS VIDEO_ARGS
 
 cat > "$EXP" <<'EOF'
 set timeout 480
@@ -133,6 +146,7 @@ eval spawn $env(QEMU) \
     $accel_flags \
     -drive file=$img,format=raw,if=virtio \
     $env(NET_ARGS) \
+    $env(VIDEO_ARGS) \
     -display none -serial stdio \
     -no-reboot
 
