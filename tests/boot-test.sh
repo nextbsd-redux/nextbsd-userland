@@ -596,6 +596,30 @@ expect {
     "LAUNCHCTL-LIST-OK" { puts "\nOK: launchctl list round-trips with launchd" }
 }
 
+# GETTY-TTYV0 — the framebuffer login. org.nextbsd.getty.console serves /dev/console,
+# which binds to exactly ONE tty (cnselect -> ttyconsdev_select); only kernel
+# MESSAGES fan out to every console. On arm64 the UART always wins that
+# selection (the EFI loader publishes hw.uart.console from ACPI SPCR on its
+# own), so org.nextbsd.getty.ttyv0 is what gives a screen-only arm64 machine a
+# reachable login. WARN on timeout: a published image built before that plist
+# landed simply doesn't emit the marker, and this stage must not fail it.
+# SKIP is expected on a guest with no framebuffer (qemu -machine virt with no
+# GPU -> no GOP -> no efifb -> vt(4) never attaches -> no /dev/ttyv0), where the
+# job's `test -c` guard makes it a deliberate no-op.
+expect {
+    timeout {
+        puts "\nWARN: GETTY-TTYV0 marker not seen (image predates org.nextbsd.getty.ttyv0 — informational)"
+    }
+    "GETTY-TTYV0-FAIL" {
+        puts "\nFAIL: GETTY-TTYV0-FAIL — framebuffer console has no login"
+        exit 1
+    }
+    "GETTY-TTYV0-SKIP" {
+        puts "\nWARN: GETTY-TTYV0-SKIP — no framebuffer on this guest; job no-ops by design"
+    }
+    "GETTY-TTYV0-OK" { puts "\nOK: framebuffer console (ttyv0) has a login" }
+}
+
 # Stage 3+ Phase J runtime: syslogd + notifyd RunAtLoad via plists,
 # then syslog(1) post + read-back round-trip via Mach IPC into the
 # ASL store. See run.sh tail for the test sequence.
