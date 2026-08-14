@@ -854,6 +854,38 @@ else
     fi
 fi
 
+# GETTY-TTYV0 — the framebuffer login (com.apple.getty.ttyv0).
+# com.apple.getty serves /dev/console, which binds to exactly ONE tty:
+# cninit() ends in cnselect(best_cn) -> ttyconsdev_select(). Kernel
+# MESSAGES fan out to every console (that is what boot_multicons buys),
+# the login does not. On arm64 the winner is always the UART, because
+# the EFI loader publishes hw.uart.console out of ACPI SPCR unbidden —
+# so without this second job an arm64 box with no serial cable has no
+# reachable login, and its screen goes quiet at the last kernel line
+# before userland, looking exactly like a hang.
+# Assert the job is loaded, and that SOMETHING owns ttyv0 when the
+# framebuffer exists (getty normally; a login shell if someone is
+# already sitting at that screen when the suite runs). A headless guest
+# — qemu -machine virt with no GPU: no GOP, no efifb, vt(4) never
+# attaches — has no /dev/ttyv0 at all, and the plist's `test -c` guard
+# makes the job a deliberate silent no-op there, so that is a SKIP and
+# not a failure.
+echo "==> getty on the framebuffer console (ttyv0)"
+if launchctl list 2>/dev/null | awk '$3 == "com.apple.getty.ttyv0" { found = 1 } END { exit !found }'; then
+    if [ -c /dev/ttyv0 ]; then
+        ttyv0_owner=$(ps -A -o tty= -o command= 2>/dev/null | awk '$1 == "ttyv0" { $1 = ""; sub(/^ /, ""); print; exit }')
+        if [ -n "$ttyv0_owner" ]; then
+            echo "GETTY-TTYV0-OK: framebuffer console served by: $ttyv0_owner"
+        else
+            echo "GETTY-TTYV0-FAIL: /dev/ttyv0 exists but no process owns it"
+        fi
+    else
+        echo "GETTY-TTYV0-SKIP: no /dev/ttyv0 on this guest (no framebuffer); job is a no-op by design"
+    fi
+else
+    echo "GETTY-TTYV0-FAIL: com.apple.getty.ttyv0 not loaded"
+fi
+
 # 10. ASL runtime smoke (Phase J). Task #41 move_member wire-up
 # landed but a follow-on halt-after-bootstrap-remote regression is
 # under investigation. Keep test at SKIP for now.

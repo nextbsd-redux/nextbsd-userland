@@ -15,12 +15,24 @@
   Why /dev/console (not ttyu0 / ttyv0):
     On both Darwin and FreeBSD, /dev/console is a kernel-provided
     character device routed to whichever console driver is active for
-    this boot — UART on serial-only boots, vt(4) on VGA, both when
-    boot.loader.conf says "Dual Console". The launchd job doesn't have
-    to know which physical device is behind it; the kernel handles
-    the multiplexing. This eliminates the missing-device respawn-loop
-    problem and removes the need for the per-device wrapper script
-    that the earlier two-plist approach used.
+    this boot — UART on serial-only boots, vt(4) on VGA. The launchd
+    job doesn't have to know which physical device is behind it; the
+    kernel handles the multiplexing. This eliminates the missing-device
+    respawn-loop problem and removes the need for the per-device
+    wrapper script that the earlier two-plist approach used.
+
+    CAVEAT (this is why com.apple.getty.ttyv0.plist exists): on a
+    dual-console boot the multiplexing covers kernel MESSAGES only.
+    printf -> cnputc walks cn_devlist and writes to every attached
+    console, but the console TTY is singular — cninit() ends with
+    cnselect(best_cn), and cnadd()/cnselect() call ttyconsdev_select(),
+    binding /dev/console to exactly ONE underlying tty. So with
+    boot_multicons="YES" you get messages on both consoles and this
+    getty on one of them. On arm64 that one is always the UART, because
+    the EFI loader publishes hw.uart.console from ACPI SPCR unbidden —
+    leaving a machine with no serial cable attached with no reachable
+    login at all. See com.apple.getty.ttyv0.plist for the full analysis
+    and for why running both jobs is safe where they coincide.
 
   Why 3wire.9600 (gettytab class), not Apple's std.9600 (#355):
     Apple's plist says std.9600, but FreeBSD's std.* classes lack the
