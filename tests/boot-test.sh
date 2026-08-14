@@ -596,7 +596,7 @@ expect {
     "LAUNCHCTL-LIST-OK" { puts "\nOK: launchctl list round-trips with launchd" }
 }
 
-# GETTY-TTYV0 — the framebuffer login. org.nextbsd.getty serves /dev/console,
+# GETTY-TTYV0 — the framebuffer login. org.nextbsd.getty.console serves /dev/console,
 # which binds to exactly ONE tty (cnselect -> ttyconsdev_select); only kernel
 # MESSAGES fan out to every console. On arm64 the UART always wins that
 # selection (the EFI loader publishes hw.uart.console from ACPI SPCR on its

@@ -635,7 +635,7 @@ fi
 #   Iter 3: getconf (POSIX configuration query; gperf tables via the
 #           vendored fake-gperf.awk).
 #   Iter 4: getty (replaces FreeBSD-runtime /usr/libexec/getty; the
-#           Apple binary now serves the org.nextbsd.getty plist on
+#           Apple binary now serves the org.nextbsd.getty.console plist on
 #           /dev/console — the existing BOOT-BANNER + "login:" stages
 #           in boot-test.sh exercise it implicitly).
 #   Iter 5: pwd_mkdb + passwd. Both replace FreeBSD-runtime binaries.
@@ -855,7 +855,7 @@ else
 fi
 
 # GETTY-TTYV0 — the framebuffer login (org.nextbsd.getty.ttyv0).
-# org.nextbsd.getty serves /dev/console, which binds to exactly ONE tty:
+# org.nextbsd.getty.console serves /dev/console, which binds to exactly ONE tty:
 # cninit() ends in cnselect(best_cn) -> ttyconsdev_select(). Kernel
 # MESSAGES fan out to every console (that is what boot_multicons buys),
 # the login does not. On arm64 the winner is always the UART, because

@@ -7,7 +7,7 @@
   serves /dev/console).
 
   Why a second job at all — /dev/console is ONE device, not "both":
-    org.nextbsd.getty.plist assumes /dev/console follows every active
+    org.nextbsd.getty.console.plist assumes /dev/console follows every active
     console, so a single job covers whatever the machine has. That is
     true of kernel MESSAGES: printf -> cnputc walks cn_devlist and
     writes to every attached console, which is what boot_multicons="YES"
@@ -54,7 +54,7 @@
     no framebuffer, so vt(4) never attaches and /dev/ttyv0 is absent)
     fails, exits, and KeepAlive respawns it every ThrottleInterval
     forever — measured at 3 log lines per 30s, permanently. That is the
-    missing-device respawn loop org.nextbsd.getty.plist's comment cites as
+    missing-device respawn loop org.nextbsd.getty.console.plist's comment cites as
     the reason it serves /dev/console instead. The `test -c` guard makes
     the job a silent no-op on such machines (measured: 0 lines in 35s)
     without reintroducing a per-device wrapper SCRIPT — the guard is one
@@ -74,6 +74,27 @@
     curated /etc/gettytab has no Pc entry — the class stock FreeBSD
     /etc/ttys uses for ttyv* — so an unknown class would silently fall
     back to `default`. TERM is vt100, same as the console job.
+
+  Why this one is ENABLED while org.nextbsd.getty.ttyu0 ships disabled:
+    Both ancestors default exactly this way — a screen gets a login, a
+    serial port does not. FreeBSD's /etc/ttys has ttyv0-ttyv7 as
+    `onifexists secure` (on whenever the device is there) against
+    ttyu0-3 as `onifconsole`; Apple's has console -> loginwindow on,
+    tty.serial off. A framebuffer is a screen with a keyboard in front
+    of it, and if nobody is sitting at it nothing happens; a serial port
+    is a wire to an unknown peer. Machines with no framebuffer are
+    handled by the guard above rather than by shipping this off, so a
+    machine that HAS a screen needs no admin action to get its login.
+
+    An admin who wants the screen login gone can drop it persistently:
+        launchctl unload -w /System/Library/LaunchDaemons/org.nextbsd.getty.ttyv0.plist
+
+  WHEN A DISPLAY SERVER / loginwindow ARRIVES, IT MUST TAKE THIS TTY.
+    This job is the stand-in for the thing Apple actually runs on the
+    console: loginwindow. A GUI that draws on the framebuffer and a
+    getty that draws on ttyv0 are two programs fighting over one screen.
+    Whoever lands a display login here should replace this job (same
+    tty, different program) or disable it, not run alongside it.
 
   Scope: ttyv0 only, matching the one terminal a user sees at boot.
   FreeBSD's /etc/ttys runs gettys on ttyv0-ttyv7 so Alt-F2..F8 give
