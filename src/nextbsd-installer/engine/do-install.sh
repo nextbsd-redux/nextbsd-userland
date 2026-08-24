@@ -86,7 +86,15 @@ detect_board() {
 		echo generic
 		return
 	fi
-	case "$(ofwdump -S -P compatible / 2>/dev/null)" in
+	# hw.fdt.compatible is the root node's compatible with the NULs already
+	# joined into spaces by the kernel (sys/dev/ofw/ofw_fdt.c). It only exists
+	# when a DTB was actually registered, it is world-readable, and it gives
+	# the WHOLE property.
+	#
+	# Prefer it to ofwdump, which needs root (/dev/openfirm is 0600) and,
+	# with -S, prints only up to the first NUL -- so "raspberrypi,500" and
+	# never the "brcm,bcm2712" that follows it.
+	case "$(sysctl -n hw.fdt.compatible 2>/dev/null)" in
 	*raspberrypi,*|*brcm,bcm2*)
 		echo fdtboot
 		return
