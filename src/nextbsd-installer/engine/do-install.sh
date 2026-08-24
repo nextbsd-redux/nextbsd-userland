@@ -26,6 +26,16 @@
 # changes the hostname after first boot.
 set -eu
 
+# Never leave the probe mount behind, whatever happens next -- including a
+# dry run, a failure, or an interrupt. The installer inspects media it does
+# not own; it should leave the machine exactly as it found it.
+SRCBOOT=/tmp/nbi-srcboot
+cleanup() {
+	umount "$SRCBOOT" 2>/dev/null || true
+	rmdir "$SRCBOOT" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 DISK="" UPGRADE=0
 MNT=/tmp/nbi-mnt
 SRC=/
@@ -45,21 +55,64 @@ LABEL=NEXTBSD
 # ofwdump(8) reads it straight out of the tree the kernel booted with, and
 # ships in base. It exits non-zero on a machine with no OFW/FDT (amd64), which
 # is exactly the "generic" answer.
+# Which boot method does this machine need? Ask the medium that actually
+# booted it, not the hardware.
+#
+# A machine booted by Raspberry Pi firmware has a FAT partition holding
+# config.txt -- that file IS the boot method, and its presence is proof rather
+# than inference. Copying that arrangement to the target is then correct by
+# construction: it demonstrably works on this hardware, which no amount of
+# board detection can promise.
+#
+# Two supporting checks keep this honest. machdep.efi_map exists on every UEFI
+# boot and no direct-firmware boot, so a Pi running the EDK2 UEFI firmware is
+# correctly sent down the ESP path even though it is a Pi. And a config.txt on
+# some unrelated FAT volume must not fool us, so the partition also has to
+# carry the kernel it names.
+#
+# find_boot_medium sets FOUND and leaves the volume mounted at $SRCBOOT
+# (cleaned up by the EXIT trap above no matter how we leave).
+FOUND=""
+find_boot_medium() {
+	# Start from a known state: a leftover mount here -- from an interrupted
+	# earlier run -- would make every mount below fail and the machine would
+	# silently look like it has no boot medium at all.
+	umount "$SRCBOOT" 2>/dev/null || true
+	mkdir -p "$SRCBOOT"
+	for cand in /dev/da*s1 /dev/da*p1 /dev/nda*s1 /dev/nda*p1 \
+	            /dev/mmcsd*s1 /dev/mmcsd*p1 /dev/ada*s1 /dev/ada*p1; do
+		[ -e "$cand" ] || continue
+		# Never look at the disk we are about to erase.
+		case "$cand" in /dev/${DISK}*) continue ;; esac
+		# Read-only: we are inspecting media we do not own, and one of them
+		# is the volume this system booted from. Nothing here needs to write.
+		mount -o ro -t msdosfs "$cand" "$SRCBOOT" 2>/dev/null || continue
+		if [ -f "$SRCBOOT/config.txt" ]; then
+			# config.txt names the kernel; a boot medium has it.
+			k=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
+			if [ -f "$SRCBOOT/${k:-kernel8.img}" ]; then
+				FOUND=$cand
+				return 0
+			fi
+		fi
+		umount "$SRCBOOT" 2>/dev/null || true
+	done
+	return 1
+}
+
 detect_board() {
-	if ofwdump -P compatible / 2>/dev/null | grep -q "brcm,bcm2712"; then
-		echo rpi5
+	# UEFI wins wherever it exists, Pi or not: an ESP is what that firmware
+	# looks for.
+	if sysctl -n machdep.efi_map >/dev/null 2>&1; then
+		echo generic
+		return
+	fi
+	if find_boot_medium; then
+		echo fdtboot
 		return
 	fi
 	echo generic
 }
-BOARD=$(detect_board)
-# Overridable for testing and for the case where detection is wrong; the
-# installer should never be un-runnable because a probe misfired.
-BOARD=${NEXTBSD_BOARD:-$BOARD}
-
-# On the Pi there is no loader to override the kernel's baked-in root device,
-# so the target's label has to match what the kernel already looks for.
-[ "$BOARD" = rpi5 ] && LABEL=ROOTFS
 
 while getopts "d:U" o; do
 	case "$o" in
@@ -70,6 +123,18 @@ while getopts "d:U" o; do
 done
 [ -n "$DISK" ] || { echo "do-install.sh: missing -d <disk>" >&2; exit 2; }
 
+# Detect AFTER $DISK is known: find_boot_medium has to skip the install target,
+# and with $DISK empty it would happily inspect the very disk we are about to
+# erase -- or, if that disk still holds an old config.txt, conclude from it.
+BOARD=$(detect_board)
+# Overridable for testing and for the case where detection is wrong; the
+# installer should never be un-runnable because a probe misfired.
+BOARD=${NEXTBSD_BOARD:-$BOARD}
+
+# On the Pi there is no loader to override the kernel's baked-in root device,
+# so the target's label has to match what the kernel already looks for.
+[ "$BOARD" = fdtboot ] && LABEL=ROOTFS
+
 progress() { printf 'PROGRESS\t%s\n' "$1"; }
 status()   { printf 'STATUS\t%s\n'   "$1"; }
 run() {
@@ -78,7 +143,7 @@ run() {
 
 # --- 1. Partition (skipped on upgrade — keep the existing layout) ------------
 if [ "$UPGRADE" = 0 ]; then
-	if [ "$BOARD" = rpi5 ]; then
+	if [ "$BOARD" = fdtboot ]; then
 		# MBR, not GPT, and a plain FAT32 data partition rather than an
 		# ESP. The BCM2712 bootloader lives in EEPROM: it looks for a FAT
 		# partition holding config.txt, reads the DTB and kernel named
@@ -122,7 +187,7 @@ fi
 
 # Where the root filesystem ended up, so the mount + fstab steps below do not
 # each have to re-derive it.
-if [ "$BOARD" = rpi5 ]; then
+if [ "$BOARD" = fdtboot ]; then
 	ROOTPART="${DISK}s2a"
 	BOOTPART="${DISK}s1"
 else
@@ -181,13 +246,13 @@ status "Setting root label + boot config ($LABEL)"
 # kernel therefore cannot find root by its baked default and drops to
 # mountroot. Until a board kernel ships with a matching default, label the Pi
 # root ROOTFS and accept that the live medium must not be left plugged in.
-if [ "$BOARD" != rpi5 ]; then
+if [ "$BOARD" != fdtboot ]; then
 	run sh -c "echo 'vfs.root.mountfrom=\"ufs:/dev/ufs/$LABEL\"' >> '$MNT/boot/loader.conf'"
 fi
 progress 90
 
 # --- 6. Make the disk bootable ----------------------------------------------
-if [ "$BOARD" = rpi5 ]; then
+if [ "$BOARD" = fdtboot ]; then
 	# The firmware boot partition: config.txt, the board DTB, and the kernel
 	# as kernel8.img. No bootcode, no ESP, no loader -- the EEPROM
 	# bootloader reads config.txt and enters the kernel itself.
@@ -200,76 +265,35 @@ if [ "$BOARD" = rpi5 ]; then
 	# Image header -- NOT /boot/kernel/kernel, which is an ELF the firmware
 	# will not enter. The live medium booted from one, so copy that: it is
 	# by definition the kernel this machine is running.
-	if [ -f /boot/kernel8.img ]; then
-		run cp /boot/kernel8.img "$BOOTMNT/kernel8.img"
-	elif [ -f "$MNT/boot/kernel8.img" ]; then
-		run cp "$MNT/boot/kernel8.img" "$BOOTMNT/kernel8.img"
-	else
-		# Last resort: lift it off the medium we booted from, which has a
-		# config.txt sitting next to it.
-		for d in /boot/msdos /boot/firmware /media/*; do
-			if [ -f "$d/kernel8.img" ]; then
-				run cp "$d/kernel8.img" "$BOOTMNT/kernel8.img"
-				break
-			fi
-		done
-	fi
-	if [ "${NEXTBSD_DRYRUN:-0}" != 1 ] && [ ! -f "$BOOTMNT/kernel8.img" ]; then
-		echo "do-install.sh: no kernel8.img found to install" >&2
+	# $FOUND / $SRCBOOT were established by detect_board() above: the volume
+	# holding the config.txt that booted this machine, still mounted.
+	if [ -z "$FOUND" ] && [ "${NEXTBSD_DRYRUN:-0}" != 1 ]; then
+		echo "do-install.sh: lost the boot medium we detected earlier" >&2
 		exit 1
 	fi
 
-	# The DTB must be Raspberry Pi's own: the firmware reads, patches (memory
-	# size, MAC, the RP1 window) and hands over THIS blob, and its patching
-	# only understands the vendor layout. Copy whichever one the live medium
-	# booted with rather than guessing the board.
-	DTB=""
-	for d in /boot/msdos /boot/firmware /media/*; do
-		[ -d "$d" ] || continue
-		for dtb in "$d"/bcm2712-rpi-*.dtb; do
-			if [ -f "$dtb" ]; then
-				run cp "$dtb" "$BOOTMNT/"
-				[ -n "$DTB" ] || DTB=$(basename "$dtb")
-			fi
+	# Reproduce the boot setup we are running from, rather than generating one.
+	# The medium booted this machine, so its boot partition is PROVEN to work
+	# on this hardware: config.txt, the DTB that config.txt names, any
+	# overlays, and the firmware blobs a pre-2712 Pi needs. Copying it
+	# wholesale is correct by construction, and needs no per-board knowledge --
+	# a generated config.txt is only as good as this script's guesses.
+	status "Copying the boot setup from ${FOUND:-<dryrun>}"
+	if [ -n "$FOUND" ]; then
+		# Everything except the noise a desktop OS leaves on a FAT volume.
+		for f in "$SRCBOOT"/*; do
+			[ -e "$f" ] || continue
+			case "$(basename "$f")" in
+			.Spotlight-V100|.fseventsd|.Trashes|System\ Volume\ Information) continue ;;
+			esac
+			run cp -R "$f" "$BOOTMNT/"
 		done
-		if [ -f "$d/LICENCE.broadcom" ]; then
-			run cp "$d/LICENCE.broadcom" "$BOOTMNT/"
-		fi
-	done
-	# Fall back to the 500/500+ blob, which is also what a Pi 5 B uses when
-	# the firmware has not been asked for something else.
-	DTB=${DTB:-bcm2712-rpi-500.dtb}
+		# Report what will actually boot, for the log and for the operator.
+		DTB=$(sed -n 's/^[[:space:]]*device_tree=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
+		KERN=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
+		status "Boot setup: kernel=${KERN:-<firmware default>} device_tree=${DTB:-<firmware default>}"
+	fi
 
-	status "Writing config.txt (device_tree=$DTB)"
-	run sh -c "cat > '$BOOTMNT/config.txt' <<CFG
-# NextBSD on a Raspberry Pi 5-family board (BCM2712).
-#
-# The EEPROM bootloader reads this file, loads device_tree=, patches it, loads
-# kernel= and enters it at EL2 with x0 = the FDT physical address. There is no
-# loader(8) in that path, so anything the kernel needs to boot is compiled in.
-kernel=kernel8.img
-device_tree=$DTB
-cmdline=cmdline.txt
-arm_64bit=1
-
-# enable_uart pins the VPU core clock; without it the divisor moves with clock
-# scaling and the serial console degrades to noise partway through boot.
-enable_uart=1
-
-# Video. Without these the firmware sets up no display and allocates no
-# framebuffer, and the machine boots to a black screen. hdmi_force_hotplug
-# covers HDMI cables and adapters that do not wire hotplug detect (pin 19) --
-# common enough that Raspberry Pi OS ships the same workaround.
-max_framebuffers=2
-display_auto_detect=1
-hdmi_force_hotplug=1
-
-# Depth IS honoured (width and height are not -- the firmware reads EDID and
-# picks). Left unset it allocates 16bpp, the driver asks for 24, and the
-# console comes up with a blue cast and near-invisible text.
-framebuffer_depth=32
-CFG"
-	run sh -c "printf 'FreeBSD: -v\\n' > '$BOOTMNT/cmdline.txt'"
 	run umount "$BOOTMNT"
 	progress 94
 else
