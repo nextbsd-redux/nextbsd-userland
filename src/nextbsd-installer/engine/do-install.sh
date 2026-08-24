@@ -57,26 +57,41 @@ LABEL=NEXTBSD
 # is exactly the "generic" answer.
 # Which boot method does this machine need?
 #
-# machdep.efi_map exists on every UEFI boot and on no direct-firmware boot, so
-# its absence is the honest signal -- no board list to maintain, and it stays
-# right for hardware nobody has thought of yet. A Raspberry Pi running the EDK2
-# UEFI firmware correctly gets the ESP layout despite being a Pi.
+# Three cases, and the tests have to be done in this order because the later
+# signals are present in more than one of them.
 #
-# Without UEFI, an FDT means the firmware entered the kernel itself and there
-# is no loader in the picture -- the Raspberry Pi arrangement: a FAT partition
-# holding config.txt, a DTB and the kernel.
+#   generic   GPT + ESP (+ freebsd-boot on x86 BIOS). A loader runs.
+#   fdtboot   MBR + FAT32 holding config.txt. NO loader: the Raspberry Pi
+#             firmware enters the kernel directly at EL2.
 #
-# Nothing here mounts anything. The installer should not be poking at media the
-# operator did not nominate, and every probe below reads metadata only.
+# 1. /dev/efi exists only when the kernel found real EFI runtime services --
+#    efidev(4) refuses to attach otherwise ("If we have no efi environment,
+#    then don't create the device"). kenv efi-version is set only by
+#    loader.efi. Either one means a UEFI loader ran, on any architecture.
+#
+#    Do NOT use machdep.efi_map for this: it is declared once, in
+#    sys/amd64/amd64/machdep.c, and does not exist on arm64 at all.
+#
+# 2. Only then ask whether there is a device tree -- and note that the
+#    presence of an FDT proves nothing on its own, because loader.efi
+#    installs the DTB it got from the EFI configuration table
+#    ("Using DTB provided by EFI at %p"). A UEFI arm64 VM has a perfectly
+#    good /dev/openfirm. That is why this test comes second, and why it
+#    matches the board rather than merely asking whether OFW exists.
+#
+# 3. x86 keeps its own answer: machdep.bootmethod is BIOS, UEFI or PVH, and
+#    is what bsdinstall itself uses (partedit_x86.c).
 detect_board() {
-	if sysctl -n machdep.efi_map >/dev/null 2>&1; then
+	if [ -e /dev/efi ] || [ -n "$(kenv -q efi-version 2>/dev/null)" ]; then
 		echo generic
 		return
 	fi
-	if ofwdump -P name / >/dev/null 2>&1; then
+	case "$(ofwdump -S -P compatible / 2>/dev/null)" in
+	*raspberrypi,*|*brcm,bcm2*)
 		echo fdtboot
 		return
-	fi
+		;;
+	esac
 	echo generic
 }
 
