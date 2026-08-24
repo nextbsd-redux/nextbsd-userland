@@ -55,64 +55,62 @@ LABEL=NEXTBSD
 # ofwdump(8) reads it straight out of the tree the kernel booted with, and
 # ships in base. It exits non-zero on a machine with no OFW/FDT (amd64), which
 # is exactly the "generic" answer.
-# Which boot method does this machine need? Ask the medium that actually
-# booted it, not the hardware.
+# Which boot method does this machine need?
 #
-# A machine booted by Raspberry Pi firmware has a FAT partition holding
-# config.txt -- that file IS the boot method, and its presence is proof rather
-# than inference. Copying that arrangement to the target is then correct by
-# construction: it demonstrably works on this hardware, which no amount of
-# board detection can promise.
+# machdep.efi_map exists on every UEFI boot and on no direct-firmware boot, so
+# its absence is the honest signal -- no board list to maintain, and it stays
+# right for hardware nobody has thought of yet. A Raspberry Pi running the EDK2
+# UEFI firmware correctly gets the ESP layout despite being a Pi.
 #
-# Two supporting checks keep this honest. machdep.efi_map exists on every UEFI
-# boot and no direct-firmware boot, so a Pi running the EDK2 UEFI firmware is
-# correctly sent down the ESP path even though it is a Pi. And a config.txt on
-# some unrelated FAT volume must not fool us, so the partition also has to
-# carry the kernel it names.
+# Without UEFI, an FDT means the firmware entered the kernel itself and there
+# is no loader in the picture -- the Raspberry Pi arrangement: a FAT partition
+# holding config.txt, a DTB and the kernel.
 #
-# find_boot_medium sets FOUND and leaves the volume mounted at $SRCBOOT
-# (cleaned up by the EXIT trap above no matter how we leave).
-FOUND=""
-find_boot_medium() {
-	# Start from a known state: a leftover mount here -- from an interrupted
-	# earlier run -- would make every mount below fail and the machine would
-	# silently look like it has no boot medium at all.
-	umount "$SRCBOOT" 2>/dev/null || true
-	mkdir -p "$SRCBOOT"
-	for cand in /dev/da*s1 /dev/da*p1 /dev/nda*s1 /dev/nda*p1 \
-	            /dev/mmcsd*s1 /dev/mmcsd*p1 /dev/ada*s1 /dev/ada*p1; do
-		[ -e "$cand" ] || continue
-		# Never look at the disk we are about to erase.
-		case "$cand" in /dev/${DISK}*) continue ;; esac
-		# Read-only: we are inspecting media we do not own, and one of them
-		# is the volume this system booted from. Nothing here needs to write.
-		mount -o ro -t msdosfs "$cand" "$SRCBOOT" 2>/dev/null || continue
-		if [ -f "$SRCBOOT/config.txt" ]; then
-			# config.txt names the kernel; a boot medium has it.
-			k=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
-			if [ -f "$SRCBOOT/${k:-kernel8.img}" ]; then
-				FOUND=$cand
-				return 0
-			fi
-		fi
-		umount "$SRCBOOT" 2>/dev/null || true
-	done
-	return 1
-}
-
+# Nothing here mounts anything. The installer should not be poking at media the
+# operator did not nominate, and every probe below reads metadata only.
 detect_board() {
-	# UEFI wins wherever it exists, Pi or not: an ESP is what that firmware
-	# looks for.
 	if sysctl -n machdep.efi_map >/dev/null 2>&1; then
 		echo generic
 		return
 	fi
-	if find_boot_medium; then
+	if ofwdump -P name / >/dev/null 2>&1; then
 		echo fdtboot
 		return
 	fi
 	echo generic
 }
+
+# The live medium's boot partition, located WITHOUT mounting anything.
+#
+# gpart reports partition types straight from the disk metadata, so the shape
+# is visible without touching a filesystem: an MBR disk carrying a fat32lba
+# slice IS the Raspberry Pi boot arrangement, whoever built it and whatever the
+# volume happens to be labelled. Structural, so it recognises a stock
+# Raspberry Pi OS card or a hand-made stick, not only our own images.
+#
+# The label lookup is a fallback for a boot partition on a scheme we did not
+# recognise. Sets BOOTSRC to a device path, or leaves it empty.
+find_boot_source() {
+	for d in $(sysctl -n kern.disks 2>/dev/null); do
+		[ "$d" = "$DISK" ] && continue
+		gpart show -p "$d" 2>/dev/null | grep -q "MBR" || continue
+		part=$(gpart show -p "$d" 2>/dev/null | awk '$4 ~ /^fat32/ {print $3; exit}')
+		if [ -n "$part" ] && [ -e "/dev/$part" ]; then
+			BOOTSRC=/dev/$part
+			return 0
+		fi
+	done
+	for l in /dev/msdosfs/*; do
+		[ -e "$l" ] || continue
+		prov=$(glabel status -s 2>/dev/null | awk -v n="${l#/dev/}" '$1 == n {print $3}')
+		[ -n "$prov" ] || continue
+		case "$prov" in ${DISK}*) continue ;; esac
+		BOOTSRC=$l
+		return 0
+	done
+	return 1
+}
+BOOTSRC=""
 
 while getopts "d:U" o; do
 	case "$o" in
@@ -265,33 +263,43 @@ if [ "$BOARD" = fdtboot ]; then
 	# Image header -- NOT /boot/kernel/kernel, which is an ELF the firmware
 	# will not enter. The live medium booted from one, so copy that: it is
 	# by definition the kernel this machine is running.
-	# $FOUND / $SRCBOOT were established by detect_board() above: the volume
-	# holding the config.txt that booted this machine, still mounted.
-	if [ -z "$FOUND" ] && [ "${NEXTBSD_DRYRUN:-0}" != 1 ]; then
-		echo "do-install.sh: lost the boot medium we detected earlier" >&2
-		exit 1
+	# The live medium's boot partition, located by label without mounting
+	# anything (see find_boot_source). We mount it read-only here, and only
+	# here, because copying files requires it.
+	if ! find_boot_source; then
+		if [ "${NEXTBSD_DRYRUN:-0}" != 1 ]; then
+			echo "do-install.sh: cannot find the boot partition we started from" >&2
+			echo "  (looked for a FAT volume labelled NEXTBSD, excluding $DISK)" >&2
+			exit 1
+		fi
 	fi
 
 	# Reproduce the boot setup we are running from, rather than generating one.
-	# The medium booted this machine, so its boot partition is PROVEN to work
-	# on this hardware: config.txt, the DTB that config.txt names, any
-	# overlays, and the firmware blobs a pre-2712 Pi needs. Copying it
-	# wholesale is correct by construction, and needs no per-board knowledge --
-	# a generated config.txt is only as good as this script's guesses.
-	status "Copying the boot setup from ${FOUND:-<dryrun>}"
-	if [ -n "$FOUND" ]; then
-		# Everything except the noise a desktop OS leaves on a FAT volume.
-		for f in "$SRCBOOT"/*; do
-			[ -e "$f" ] || continue
-			case "$(basename "$f")" in
-			.Spotlight-V100|.fseventsd|.Trashes|System\ Volume\ Information) continue ;;
-			esac
-			run cp -R "$f" "$BOOTMNT/"
-		done
-		# Report what will actually boot, for the log and for the operator.
-		DTB=$(sed -n 's/^[[:space:]]*device_tree=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
-		KERN=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
-		status "Boot setup: kernel=${KERN:-<firmware default>} device_tree=${DTB:-<firmware default>}"
+	# The medium booted this machine, so its boot partition demonstrably works
+	# on this hardware: config.txt, the DTB it names, any overlays, and the
+	# firmware blobs a pre-2712 Pi needs. Copying it wholesale is correct by
+	# construction and needs no per-board knowledge -- which also means a Pi 4,
+	# or a board nobody has thought of yet, works with no changes here.
+	status "Copying the boot setup from ${BOOTSRC:-<dryrun>}"
+	if [ -n "$BOOTSRC" ]; then
+		run mkdir -p "$SRCBOOT"
+		run mount -o ro -t msdosfs "$BOOTSRC" "$SRCBOOT"
+		if [ "${NEXTBSD_DRYRUN:-0}" != 1 ]; then
+			for f in "$SRCBOOT"/*; do
+				[ -e "$f" ] || continue
+				case "$(basename "$f")" in
+				.Spotlight-V100|.fseventsd|.Trashes) continue ;;
+				esac
+				cp -R "$f" "$BOOTMNT/"
+			done
+			DTB=$(sed -n 's/^[[:space:]]*device_tree=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
+			KERN=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
+			status "Boot setup: kernel=${KERN:-<firmware default>} device_tree=${DTB:-<firmware default>}"
+			umount "$SRCBOOT" || true
+		else
+			echo "DRYRUN: cp -R $SRCBOOT/* $BOOTMNT/"
+			echo "DRYRUN: umount $SRCBOOT"
+		fi
 	fi
 
 	run umount "$BOOTMNT"
