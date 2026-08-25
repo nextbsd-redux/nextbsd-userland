@@ -171,7 +171,7 @@ sh_try_kenv_slug(const char *key, char *out, size_t outsz)
  * name (from smbios.system.version, e.g. "ThinkPad-T460s") that is unique
  * enough to use bare; returns 0 when it is a GENERIC fallback
  * (smbios.system.product such as "VirtualBox", shared by every guest of
- * that hypervisor, or the "freebsd" last resort) that the caller should
+ * that hypervisor, or the "nextbsd" last resort) that the caller should
  * make unique with a per-machine suffix.
  */
 static int
@@ -180,14 +180,14 @@ sh_derive_slug(char *out, size_t outsz)
 	/*
 	 * Prefer the model name in smbios.system.version, but skip it when
 	 * it is a non-identifying revision (e.g. VirtualBox's "1.2") and
-	 * fall through to smbios.system.product ("VirtualBox"). "freebsd"
+	 * fall through to smbios.system.product ("VirtualBox"). "nextbsd"
 	 * is the last resort.
 	 */
 	if (sh_try_kenv_slug("smbios.system.version", out, outsz))
 		return (1);	/* real model name → unique enough, use bare */
 	if (sh_try_kenv_slug("smbios.system.product", out, outsz))
 		return (0);	/* generic product (e.g. VirtualBox) → add suffix */
-	(void)strncpy(out, "freebsd", outsz - 1);
+	(void)strncpy(out, "nextbsd", outsz - 1);
 	out[outsz - 1] = '\0';
 	return (0);		/* last resort → add suffix */
 }
@@ -240,7 +240,7 @@ freebsd_synthesize_hostname(void)
 	/*
 	 * Identifying model names (e.g. "ThinkPad-T460s" from
 	 * smbios.system.version) are used bare. Generic fallbacks
-	 * (smbios.system.product like "VirtualBox", or "freebsd") get a short
+	 * (smbios.system.product like "VirtualBox", or "nextbsd") get a short
 	 * per-machine suffix from the SMBIOS UUID appended — otherwise every
 	 * guest of the same hypervisor would synthesize the identical hostname
 	 * (e.g. all VirtualBox guests -> "VirtualBox", or "1-2" before the
