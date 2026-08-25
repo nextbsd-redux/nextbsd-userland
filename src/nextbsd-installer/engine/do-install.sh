@@ -369,13 +369,23 @@ if [ "$PAYLOAD" = firmware ]; then
 	# on the line rather than only at position 0 -- the Pi firmware
 	# prepends a dozen parameters of its own before it
 	# (nextbsd-kernel#93).
+	# cmdline.txt is ONE line. Raspberry Pi's boot-behaviour.adoc is
+	# explicit: "All parameters in cmdline.txt must stay on the same single
+	# line... the kernel ignores anything after the first line." Appending a
+	# second line silently drops it -- which is exactly what happened the
+	# first time this ran: the firmware passed only "FreeBSD: -v", the
+	# tunable never arrived, and the kernel fell back to its compiled-in
+	# ufs:/dev/ufs/ROOTFS and tried to mount the install medium.
+	#
+	# So rewrite the single line, carrying over the flags the medium had.
 	status "Pointing cmdline.txt at ufs/$LABEL"
+	OLDCMD=""
 	if [ -f "$BOOTMNT/cmdline.txt" ]; then
-		run sed -i "" -e "/vfs\.root\.mountfrom/d" "$BOOTMNT/cmdline.txt"
-	else
-		run sh -c "printf 'FreeBSD: -v\\n' > '$BOOTMNT/cmdline.txt'"
+		OLDCMD=$(head -1 "$BOOTMNT/cmdline.txt" 2>/dev/null |
+		    sed -e 's/[[:space:]]*vfs\.root\.mountfrom=[^[:space:]]*//g')
 	fi
-	run sh -c "printf 'FreeBSD: vfs.root.mountfrom=ufs:/dev/ufs/%s\\n' '$LABEL' >> '$BOOTMNT/cmdline.txt'"
+	[ -n "$OLDCMD" ] || OLDCMD="FreeBSD: -v"
+	run sh -c "printf '%s vfs.root.mountfrom=ufs:/dev/ufs/%s\\n' '$OLDCMD' '$LABEL' > '$BOOTMNT/cmdline.txt'"
 	fi
 
 	run umount "$BOOTMNT"
