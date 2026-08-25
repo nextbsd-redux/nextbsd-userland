@@ -10,7 +10,7 @@
 #   * ...EXCEPT on a Raspberry Pi 5-family board, which cannot boot that at
 #     all. There is no UEFI and no loader(8): the EEPROM bootloader reads
 #     config.txt off a FAT partition and enters the kernel directly. That
-#     needs MBR + FAT32 + UFS, and is selected automatically -- see BOARD.
+#     needs MBR + FAT32 + UFS, selected automatically -- see LAYOUT/PAYLOAD.
 #   * UFS root labeled ROOTFS  -> the shipped /etc/fstab (ufs/ROOTFS) and the
 #     kernel's baked-in ufs:/dev/ufs/ROOTFS root both resolve with NO edits,
 #     and the install is disk-path agnostic (ada0/nvd0/vtbd0 all just work).
@@ -81,26 +81,38 @@ LABEL=NEXTBSD
 #
 # 3. x86 keeps its own answer: machdep.bootmethod is BIOS, UEFI or PVH, and
 #    is what bsdinstall itself uses (partedit_x86.c).
-detect_board() {
+# Two independent questions, deliberately kept apart.
+#
+# LAYOUT -- who reads the partition table? That is fixed in silicon or in an
+# EEPROM and does not change because something UEFI-shaped runs afterwards. On
+# a Raspberry Pi the GPU firmware always reads it, so a Pi always wants
+# MBR + FAT, even under EDK2 or U-Boot's EFI payload. Getting this from the
+# board is what makes the answer right for a Pi that boots through a UEFI
+# layer -- stock FreeBSD's Pi image does exactly that.
+#
+# PAYLOAD -- what goes on the boot partition? That follows how this system was
+# actually started: an EFI tree if a UEFI loader ran, config.txt and a kernel
+# if the firmware entered the kernel itself.
+#
+# NOT machdep.efi_map for the UEFI test: it is declared once, in
+# sys/amd64/amd64/machdep.c, and does not exist on arm64 at all. And not "is
+# there an FDT", because loader.efi installs the DTB it got from the EFI
+# configuration table -- a UEFI arm64 VM has a perfectly good /dev/openfirm.
+detect_layout() {
+	# hw.fdt.compatible carries the whole property with the NULs already
+	# joined by the kernel; ofwdump needs root and truncates at the first.
+	case "$(sysctl -n hw.fdt.compatible 2>/dev/null)" in
+	*raspberrypi,*|*brcm,bcm2*) echo mbr-fat; return ;;
+	esac
+	echo gpt
+}
+
+detect_payload() {
 	if [ -e /dev/efi ] || [ -n "$(kenv -q efi-version 2>/dev/null)" ]; then
-		echo generic
+		echo efi
 		return
 	fi
-	# hw.fdt.compatible is the root node's compatible with the NULs already
-	# joined into spaces by the kernel (sys/dev/ofw/ofw_fdt.c). It only exists
-	# when a DTB was actually registered, it is world-readable, and it gives
-	# the WHOLE property.
-	#
-	# Prefer it to ofwdump, which needs root (/dev/openfirm is 0600) and,
-	# with -S, prints only up to the first NUL -- so "raspberrypi,500" and
-	# never the "brcm,bcm2712" that follows it.
-	case "$(sysctl -n hw.fdt.compatible 2>/dev/null)" in
-	*raspberrypi,*|*brcm,bcm2*)
-		echo fdtboot
-		return
-		;;
-	esac
-	echo generic
+	echo firmware
 }
 
 # The live medium's boot partition, located WITHOUT mounting anything.
@@ -144,17 +156,19 @@ while getopts "d:U" o; do
 done
 [ -n "$DISK" ] || { echo "do-install.sh: missing -d <disk>" >&2; exit 2; }
 
-# Detect AFTER $DISK is known: find_boot_medium has to skip the install target,
+# Detect AFTER $DISK is known: find_boot_source has to skip the install target,
 # and with $DISK empty it would happily inspect the very disk we are about to
-# erase -- or, if that disk still holds an old config.txt, conclude from it.
-BOARD=$(detect_board)
+# erase -- or conclude from a stale config.txt still sitting on it.
+LAYOUT=${NEXTBSD_LAYOUT:-$(detect_layout)}
+PAYLOAD=${NEXTBSD_PAYLOAD:-$(detect_payload)}
 # Overridable for testing and for the case where detection is wrong; the
 # installer should never be un-runnable because a probe misfired.
-BOARD=${NEXTBSD_BOARD:-$BOARD}
-
-# On the Pi there is no loader to override the kernel's baked-in root device,
-# so the target's label has to match what the kernel already looks for.
-[ "$BOARD" = fdtboot ] && LABEL=ROOTFS
+#
+# NEXTBSD_BOARD is the older single-valued knob, kept working.
+case "${NEXTBSD_BOARD:-}" in
+fdtboot) LAYOUT=mbr-fat; PAYLOAD=firmware ;;
+generic) LAYOUT=gpt;     PAYLOAD=efi      ;;
+esac
 
 progress() { printf 'PROGRESS\t%s\n' "$1"; }
 status()   { printf 'STATUS\t%s\n'   "$1"; }
@@ -164,7 +178,7 @@ run() {
 
 # --- 1. Partition (skipped on upgrade — keep the existing layout) ------------
 if [ "$UPGRADE" = 0 ]; then
-	if [ "$BOARD" = fdtboot ]; then
+	if [ "$LAYOUT" = mbr-fat ]; then
 		# MBR, not GPT, and a plain FAT32 data partition rather than an
 		# ESP. The BCM2712 bootloader lives in EEPROM: it looks for a FAT
 		# partition holding config.txt, reads the DTB and kernel named
@@ -208,7 +222,7 @@ fi
 
 # Where the root filesystem ended up, so the mount + fstab steps below do not
 # each have to re-derive it.
-if [ "$BOARD" = fdtboot ]; then
+if [ "$LAYOUT" = mbr-fat ]; then
 	ROOTPART="${DISK}s2a"
 	BOOTPART="${DISK}s1"
 else
@@ -267,13 +281,13 @@ status "Setting root label + boot config ($LABEL)"
 # kernel therefore cannot find root by its baked default and drops to
 # mountroot. Until a board kernel ships with a matching default, label the Pi
 # root ROOTFS and accept that the live medium must not be left plugged in.
-if [ "$BOARD" != fdtboot ]; then
+if [ "$PAYLOAD" = efi ]; then
 	run sh -c "echo 'vfs.root.mountfrom=\"ufs:/dev/ufs/$LABEL\"' >> '$MNT/boot/loader.conf'"
 fi
 progress 90
 
 # --- 6. Make the disk bootable ----------------------------------------------
-if [ "$BOARD" = fdtboot ]; then
+if [ "$PAYLOAD" = firmware ]; then
 	# The firmware boot partition: config.txt, the board DTB, and the kernel
 	# as kernel8.img. No bootcode, no ESP, no loader -- the EEPROM
 	# bootloader reads config.txt and enters the kernel itself.
@@ -282,10 +296,6 @@ if [ "$BOARD" = fdtboot ]; then
 	run mkdir -p "$BOOTMNT"
 	run mount -t msdosfs "/dev/$BOOTPART" "$BOOTMNT"
 
-	# kernel8.img is kernel.bin -- the kernel wrapped in an arm64 Linux
-	# Image header -- NOT /boot/kernel/kernel, which is an ELF the firmware
-	# will not enter. The live medium booted from one, so copy that: it is
-	# by definition the kernel this machine is running.
 	# The live medium's boot partition, located by label without mounting
 	# anything (see find_boot_source). We mount it read-only here, and only
 	# here, because copying files requires it.
@@ -317,12 +327,40 @@ if [ "$BOARD" = fdtboot ]; then
 			done
 			DTB=$(sed -n 's/^[[:space:]]*device_tree=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
 			KERN=$(sed -n 's/^[[:space:]]*kernel=[[:space:]]*//p' "$SRCBOOT/config.txt" 2>/dev/null | tail -1)
-			status "Boot setup: kernel=${KERN:-<firmware default>} device_tree=${DTB:-<firmware default>}"
+				status "Boot setup: kernel=${KERN:-<firmware default>} device_tree=${DTB:-<firmware default>}"
+
 			umount "$SRCBOOT" || true
 		else
 			echo "DRYRUN: cp -R $SRCBOOT/* $BOOTMNT/"
 			echo "DRYRUN: umount $SRCBOOT"
 		fi
+	# Point the installed system at ITS OWN root.
+	#
+	# The copied cmdline.txt still names the medium's root, and both
+	# volumes would otherwise be labelled ROOTFS -- two providers for
+	# one label, and the kernel mounts whichever it finds. The old
+	# mitigation was "do not leave the stick plugged in", which is not
+	# a design.
+	#
+	# There is no loader here to write a loader.conf, but the firmware
+	# does hand /chosen/bootargs to the kernel, and boot_parse_arg()
+	# sets any name=value token into the kernel environment. So the
+	# same tunable the generic path writes to loader.conf can be
+	# passed on the command line instead:
+	#
+	#   FreeBSD: vfs.root.mountfrom=ufs:/dev/ufs/NEXTBSD
+	#
+	# This only works because the FreeBSD: guard is now found anywhere
+	# on the line rather than only at position 0 -- the Pi firmware
+	# prepends a dozen parameters of its own before it
+	# (nextbsd-kernel#93).
+	status "Pointing cmdline.txt at ufs/$LABEL"
+	if [ -f "$BOOTMNT/cmdline.txt" ]; then
+		run sed -i "" -e "/vfs\.root\.mountfrom/d" "$BOOTMNT/cmdline.txt"
+	else
+		run sh -c "printf 'FreeBSD: -v\\n' > '$BOOTMNT/cmdline.txt'"
+	fi
+	run sh -c "printf 'FreeBSD: vfs.root.mountfrom=ufs:/dev/ufs/%s\\n' '$LABEL' >> '$BOOTMNT/cmdline.txt'"
 	fi
 
 	run umount "$BOOTMNT"
