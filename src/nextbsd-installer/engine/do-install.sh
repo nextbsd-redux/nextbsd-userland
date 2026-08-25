@@ -194,13 +194,28 @@ if [ "$UPGRADE" = 0 ]; then
 		run gpart add -t fat32lba -s 100m "$DISK"
 		run gpart add -t freebsd "$DISK"
 		# The UFS root lives in a BSD label inside the freebsd slice.
+		#
+		# Destroy anything GEOM may have tasted there first. Creating a
+		# freebsd slice over a disk that previously held one makes GEOM
+		# read the old BSD label out of the sectors still sitting at that
+		# offset and instantiate a scheme from it -- after which
+		# `gpart create -s bsd` fails with "File exists" and the install
+		# stops half-partitioned. Wiping the label sector as well, since
+		# destroy alone leaves the bytes that caused the taste.
+		run gpart destroy -F "/dev/${DISK}s2" 2>/dev/null || true
+		run dd if=/dev/zero of="/dev/${DISK}s2" bs=512 count=34 2>/dev/null || true
 		run gpart create -s bsd "/dev/${DISK}s2"
 		run gpart add -t freebsd-ufs "/dev/${DISK}s2"
 		progress 8
 
 		status "Creating UFS root (label $LABEL)"
 		run newfs -U -L "$LABEL" "/dev/${DISK}s2a"
-		run newfs_msdos -F 32 -L NEXTBSD "/dev/${DISK}s1"
+		# -c 1: one sector per cluster. Without it newfs_msdos picks a
+		# larger cluster and a 100 MB partition yields ~12,700 clusters,
+		# below the 65,525 that *defines* FAT32 -- so it refuses. This is
+		# the same choice build.sh makes (sectors_per_cluster=1) and that
+		# Raspberry Pi OS makes (mkdosfs -F 32 -s 1).
+		run newfs_msdos -F 32 -c 1 -L NEXTBSD "/dev/${DISK}s1"
 		progress 14
 	else
 		status "Partitioning $DISK (GPT: freebsd-boot + EFI + freebsd-ufs)"
