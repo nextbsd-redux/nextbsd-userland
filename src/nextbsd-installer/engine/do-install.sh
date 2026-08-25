@@ -194,13 +194,28 @@ if [ "$UPGRADE" = 0 ]; then
 		run gpart add -t fat32lba -s 100m "$DISK"
 		run gpart add -t freebsd "$DISK"
 		# The UFS root lives in a BSD label inside the freebsd slice.
+		#
+		# Destroy anything GEOM may have tasted there first. Creating a
+		# freebsd slice over a disk that previously held one makes GEOM
+		# read the old BSD label out of the sectors still sitting at that
+		# offset and instantiate a scheme from it -- after which
+		# `gpart create -s bsd` fails with "File exists" and the install
+		# stops half-partitioned. Wiping the label sector as well, since
+		# destroy alone leaves the bytes that caused the taste.
+		run gpart destroy -F "/dev/${DISK}s2" 2>/dev/null || true
+		run dd if=/dev/zero of="/dev/${DISK}s2" bs=512 count=34 2>/dev/null || true
 		run gpart create -s bsd "/dev/${DISK}s2"
 		run gpart add -t freebsd-ufs "/dev/${DISK}s2"
 		progress 8
 
 		status "Creating UFS root (label $LABEL)"
 		run newfs -U -L "$LABEL" "/dev/${DISK}s2a"
-		run newfs_msdos -F 32 -L NEXTBSD "/dev/${DISK}s1"
+		# -c 1: one sector per cluster. Without it newfs_msdos picks a
+		# larger cluster and a 100 MB partition yields ~12,700 clusters,
+		# below the 65,525 that *defines* FAT32 -- so it refuses. This is
+		# the same choice build.sh makes (sectors_per_cluster=1) and that
+		# Raspberry Pi OS makes (mkdosfs -F 32 -s 1).
+		run newfs_msdos -F 32 -c 1 -L NEXTBSD "/dev/${DISK}s1"
 		progress 14
 	else
 		status "Partitioning $DISK (GPT: freebsd-boot + EFI + freebsd-ufs)"
@@ -354,13 +369,23 @@ if [ "$PAYLOAD" = firmware ]; then
 	# on the line rather than only at position 0 -- the Pi firmware
 	# prepends a dozen parameters of its own before it
 	# (nextbsd-kernel#93).
+	# cmdline.txt is ONE line. Raspberry Pi's boot-behaviour.adoc is
+	# explicit: "All parameters in cmdline.txt must stay on the same single
+	# line... the kernel ignores anything after the first line." Appending a
+	# second line silently drops it -- which is exactly what happened the
+	# first time this ran: the firmware passed only "FreeBSD: -v", the
+	# tunable never arrived, and the kernel fell back to its compiled-in
+	# ufs:/dev/ufs/ROOTFS and tried to mount the install medium.
+	#
+	# So rewrite the single line, carrying over the flags the medium had.
 	status "Pointing cmdline.txt at ufs/$LABEL"
+	OLDCMD=""
 	if [ -f "$BOOTMNT/cmdline.txt" ]; then
-		run sed -i "" -e "/vfs\.root\.mountfrom/d" "$BOOTMNT/cmdline.txt"
-	else
-		run sh -c "printf 'FreeBSD: -v\\n' > '$BOOTMNT/cmdline.txt'"
+		OLDCMD=$(head -1 "$BOOTMNT/cmdline.txt" 2>/dev/null |
+		    sed -e 's/[[:space:]]*vfs\.root\.mountfrom=[^[:space:]]*//g')
 	fi
-	run sh -c "printf 'FreeBSD: vfs.root.mountfrom=ufs:/dev/ufs/%s\\n' '$LABEL' >> '$BOOTMNT/cmdline.txt'"
+	[ -n "$OLDCMD" ] || OLDCMD="FreeBSD: -v"
+	run sh -c "printf '%s vfs.root.mountfrom=ufs:/dev/ufs/%s\\n' '$OLDCMD' '$LABEL' > '$BOOTMNT/cmdline.txt'"
 	fi
 
 	run umount "$BOOTMNT"
