@@ -2429,9 +2429,19 @@ system_specific_bootstrap(bool sflag)
 		}
 	}
 
-	empty_dir(_PATH_VARRUN, NULL);
-	empty_dir(_PATH_TMP, NULL);
-	(void)remove(_PATH_NOLOGIN);
+	/*
+	 * NextBSD: the boot-time cleanup of /var/run and /tmp moved to PID 1
+	 * (launchd_clean_boot_dirs(), src/launchd.c), which runs it before it
+	 * scans and dispatches the LaunchDaemons.
+	 *
+	 * It cannot happen here. This function runs from the
+	 * com.apple.launchctl.System job, which PID 1 dispatches from that
+	 * same scan -- so the wipe ran CONCURRENTLY with daemons that were
+	 * already up, deleting their live sockets and pidfiles. mDNSResponder
+	 * lost /var/run/mDNSResponder that way and then served an unlinked
+	 * socket forever, because an unlinked-but-listening AF_UNIX socket is
+	 * invisible to its holder. See issue #70.
+	 */
 
 	if (path_check("/usr/libexec/dirhelper")) {
 		const char *dirhelper_tool[] = { "/usr/libexec/dirhelper", "-machineBoot", NULL };

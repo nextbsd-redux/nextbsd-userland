@@ -57,6 +57,8 @@
 #include <pwd.h>
 #include <grp.h>
 #include <ttyent.h>
+#include <dirent.h>
+#include <sys/param.h>
 #include <dlfcn.h>
 #include <dirent.h>
 #include <string.h>
@@ -104,6 +106,8 @@ static void do_pid1_crash_diagnosis_mode(const char *msg);
 static int basic_fork(void);
 static bool do_pid1_crash_diagnosis_mode2(const char *msg);
 static void launchd_root_make_writable(void);
+static void launchd_clean_boot_dirs(void);
+static void launchd_empty_dir(const char *thedir, dev_t dev);
 
 static void *update_thread(void *nothing);
 
@@ -313,6 +317,19 @@ main(int argc, char *const *argv)
 		launchd_root_make_writable();
 
 		/*
+		 * Empty /var/run and /tmp BEFORE any LaunchDaemon starts.
+		 * This used to happen in launchctl's system_specific_bootstrap(),
+		 * run from the com.apple.launchctl.System job -- which this
+		 * process dispatches from launchd_scan_launchdaemons() below,
+		 * i.e. CONCURRENTLY with the daemons it had already started.
+		 * The wipe therefore deleted live daemons' sockets and pidfiles
+		 * out from under them (issue #70). Doing it here restores the
+		 * invariant: the boot directories are cleaned before anything
+		 * runs, never beside something.
+		 */
+		launchd_clean_boot_dirs();
+
+		/*
 		 * freebsd-launchd-mach boot-readiness floor — before any
 		 * LaunchDaemon is dispatched:
 		 *
@@ -364,9 +381,15 @@ main(int argc, char *const *argv)
  * The FreeBSD kernel always mounts / read-only — vfs_mountroot.c forces
  * the 'ro' option and deliberately discards vfs.root.mountfrom.options=rw.
  * Apple's launchd performs the read-write transition itself, in
- * launchctl's do_potential_fsck(), run before the LaunchDaemons scan;
- * this port dropped that bootstrapper. Restore the step here so / is
- * writable before getty / syslogd / etc. are dispatched — no rc.d.
+ * launchctl's do_potential_fsck(), run before the LaunchDaemons scan.
+ *
+ * NOTE: contrary to what this comment used to claim, that bootstrapper was
+ * NOT dropped -- jobmgr_init_session() (core.c) still submits
+ * com.apple.launchctl.System, and it still runs do_potential_fsck(). So the
+ * root remount is currently performed twice per boot, concurrently. Doing it
+ * here is what guarantees / is writable before any LaunchDaemon is
+ * dispatched; the duplicate in the bootstrapper is redundant work that
+ * should be removed separately (issue #70).
  *
  * Filesystem-agnostic: statfs() reports the mounted type and fsck(8) /
  * mount(8) dispatch on it. Works for UFS today; a future root on any
@@ -418,6 +441,73 @@ launchd_run_tool(const char *const argv[])
 		    "root-rw: %s stderr: %.400s", argv[0], errbuf);
 	}
 	return status;
+}
+
+static void
+launchd_empty_dir(const char *thedir, dev_t dev)
+{
+	struct dirent *de;
+	struct stat sb;
+	char path[MAXPATHLEN];
+	DIR *od;
+
+	if ((od = opendir(thedir)) == NULL) {
+		return;
+	}
+	while ((de = readdir(od)) != NULL) {
+		if (strcmp(de->d_name, ".") == 0 ||
+		    strcmp(de->d_name, "..") == 0) {
+			continue;
+		}
+		if (snprintf(path, sizeof(path), "%s/%s", thedir,
+		    de->d_name) >= (int)sizeof(path)) {
+			continue;
+		}
+		if (lstat(path, &sb) != 0) {
+			continue;
+		}
+		/*
+		 * launchctl's empty_dir() force-unmounted anything on a
+		 * different device. PID 1 has no business doing that this
+		 * early, and NextBSD mounts nothing under /var/run or /tmp
+		 * at boot -- skip such entries instead.
+		 */
+		if (sb.st_dev != dev) {
+			continue;
+		}
+		if (S_ISDIR(sb.st_mode)) {
+			launchd_empty_dir(path, dev);
+		}
+		(void)lchflags(path, 0);
+		(void)remove(path);
+	}
+	(void)closedir(od);
+}
+
+/*
+ * Empty the boot-time scratch directories. Ported from the parts of
+ * launchctl's system_specific_bootstrap() that NextBSD actually needs;
+ * see the call site for why it has to happen here instead.
+ */
+static void
+launchd_clean_boot_dirs(void)
+{
+	static const char *const dirs[] = { _PATH_VARRUN, _PATH_TMP };
+	struct stat sb;
+	size_t i;
+
+	for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+		if (lstat(dirs[i], &sb) != 0) {
+			launchd_syslog(LOG_WARNING | LOG_CONSOLE,
+			    "boot-clean: lstat(%s) failed: %s",
+			    dirs[i], strerror(errno));
+			continue;
+		}
+		launchd_empty_dir(dirs[i], sb.st_dev);
+		launchd_syslog(LOG_NOTICE | LOG_CONSOLE,
+		    "boot-clean: emptied %s", dirs[i]);
+	}
+	(void)remove(_PATH_NOLOGIN);
 }
 
 static void
