@@ -1272,6 +1272,37 @@ fi
 # ladder 4s = ~14s, boot scheduling adds slack). Cat the stderr
 # log so the markers reach this console for boot-test.sh's expect
 # blocks.
+# CI-only lease accelerant (issue #65).
+#
+# IPCONFIGD_FAST_LEASE caps the lease used for T1/T2 timer math so a renewal
+# happens inside the test budget instead of at T1 = lease/2 (6 hours against a
+# real DHCP server, 12 hours against SLIRP's 86400s lease).
+#
+# This used to live in the image's com.apple.IPConfiguration.plist, which meant
+# every INSTALLED machine renewed its lease every 5 seconds forever -- roughly
+# 8,600 DHCPREQUESTs per day per interface instead of 4. Inject it here, on the
+# test image only, so the knob keeps working exactly where it is wanted and
+# never ships.
+IPCFG_PLIST=/System/Library/LaunchDaemons/com.apple.IPConfiguration.plist
+if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
+    echo "IPCFG-CI: injecting IPCONFIGD_FAST_LEASE=10 for the renewal gate"
+    awk 'BEGIN{d=0}
+         {
+           if (!d && $0 ~ /^<dict>$/) {
+             print
+             print "    <key>EnvironmentVariables</key>"
+             print "    <dict>"
+             print "        <key>IPCONFIGD_FAST_LEASE</key>"
+             print "        <string>10</string>"
+             print "    </dict>"
+             d=1
+           } else print
+         }' "$IPCFG_PLIST" > /tmp/ipcfg-ci.plist &&
+        mv /tmp/ipcfg-ci.plist "$IPCFG_PLIST"
+    launchctl unload "$IPCFG_PLIST" 2>/dev/null || true
+    launchctl load   "$IPCFG_PLIST" 2>/dev/null || true
+fi
+
 if [ -f /var/log/ipconfigd.stderr ]; then
     i=0
     while [ $i -lt 30 ]; do
