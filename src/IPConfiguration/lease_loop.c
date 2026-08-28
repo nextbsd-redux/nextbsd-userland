@@ -79,6 +79,37 @@ cap_lease(uint32_t in, uint32_t cap)
 	return (in);
 }
 
+/*
+ * Compare the fields sc_publish_ipv4() actually writes into the
+ * SCDynamicStore: address, netmask, router, server identifier and the
+ * DNS server list. lease_time is deliberately excluded — it advances on
+ * every renewal by design and is carried by the /DHCP key, not the IPv4
+ * key.
+ *
+ * A renewal that changes none of these must not re-publish: consumers
+ * cannot distinguish a rewrite from a real reconfiguration, and
+ * mDNSResponder responds to a State:/Network/.../IPv4 write by flushing
+ * and re-announcing its whole cache. That is visible to the user as
+ * Bonjour service lists clearing and repopulating on every renewal.
+ */
+static bool
+ipv4_publish_equal(const struct dhcp_lease *a, const struct dhcp_lease *b)
+{
+	unsigned i;
+
+	if (a->addr.s_addr != b->addr.s_addr ||
+	    a->netmask.s_addr != b->netmask.s_addr ||
+	    a->router.s_addr != b->router.s_addr ||
+	    a->server.s_addr != b->server.s_addr ||
+	    a->dns_count != b->dns_count)
+		return (false);
+	for (i = 0; i < a->dns_count; i++) {
+		if (a->dns[i].s_addr != b->dns[i].s_addr)
+			return (false);
+	}
+	return (true);
+}
+
 int
 lease_loop_run(const char *ifname, struct dhcp_lease *lease,
     struct sc_publish *pub, uint32_t lease_cap_secs,
@@ -86,6 +117,11 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 {
 	uint32_t lease_secs = cap_lease(lease->lease_time, lease_cap_secs);
 	bool renew_marker_fired = false;
+	/* Mirror of what is currently in the store. The caller published
+	 * this lease before entering the loop (ipconfigd.c dhcp_run_on_
+	 * interface), so the store and this copy start in agreement. */
+	struct dhcp_lease published = *lease;
+	bool unchanged_logged = false;
 
 	if (lease_secs == 0) {
 		xlog("zero lease time — treating as infinite (no renewal)");
@@ -124,11 +160,22 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 			lease_secs = cap_lease(lease->lease_time,
 			    lease_cap_secs);
 			if (pub != NULL) {
-				if (sc_publish_ipv4(pub, ifname, lease) != 0)
-					xlog("RENEWING: re-publish failed (continuing)");
+				if (!ipv4_publish_equal(lease, &published)) {
+					if (sc_publish_ipv4(pub, ifname,
+					    lease) != 0)
+						xlog("RENEWING: re-publish failed (continuing)");
+					else
+						published = *lease;
+				} else if (!unchanged_logged) {
+					xlog("RENEWING: IPv4 config unchanged — "
+					    "skipping re-publish");
+					unchanged_logged = true;
+				}
 				/* Issue #88: refresh /DHCP on renewal so
 				 * LeaseStartTime advances and Option_12
-				 * tracks any server-side change. */
+				 * tracks any server-side change. This key is
+				 * left unguarded on purpose — no consumer
+				 * treats /DHCP as a reconfiguration trigger. */
 				if (sc_publish_dhcp(pub, ifname, lease) != 0)
 					xlog("RENEWING: /DHCP re-publish failed (continuing)");
 			}
@@ -153,8 +200,17 @@ lease_loop_run(const char *ifname, struct dhcp_lease *lease,
 			lease_secs = cap_lease(lease->lease_time,
 			    lease_cap_secs);
 			if (pub != NULL) {
-				if (sc_publish_ipv4(pub, ifname, lease) != 0)
-					xlog("REBINDING: re-publish failed (continuing)");
+				if (!ipv4_publish_equal(lease, &published)) {
+					if (sc_publish_ipv4(pub, ifname,
+					    lease) != 0)
+						xlog("REBINDING: re-publish failed (continuing)");
+					else
+						published = *lease;
+				} else if (!unchanged_logged) {
+					xlog("REBINDING: IPv4 config unchanged — "
+					    "skipping re-publish");
+					unchanged_logged = true;
+				}
 				if (sc_publish_dhcp(pub, ifname, lease) != 0)
 					xlog("REBINDING: /DHCP re-publish failed (continuing)");
 			}
