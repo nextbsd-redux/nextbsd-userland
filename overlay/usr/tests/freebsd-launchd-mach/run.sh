@@ -924,33 +924,6 @@ else
     exit 1
 fi
 
-# syslogd and aslmanager are the only LaunchDaemons with no RunAtLoad:
-# they are ON-DEMAND jobs, started by launchd when a client touches
-# com.apple.system.logger or the /var/run/log socket. So "is syslogd
-# running?" is not a meaningful question until something has logged.
-#
-# This check used to pass only because launchd's in-process plist scan
-# force-started every job with job_dispatch(j, kickstart=true), including
-# on-demand ones -- against their own plists' intent. With the scan gone
-# and `launchctl bootstrap` doing the loading (Apple's path), syslogd
-# correctly stays idle until demanded, and a bare pgrep fails.
-#
-# Poke it first, then check. This tests something real -- that on-demand
-# launch works -- rather than that a daemon was force-started.
-_demand_logger=/usr/tests/freebsd-launchd-mach/test_bsd_logger
-if [ -x "$_demand_logger" ]; then
-    "$_demand_logger" syslogdemand "SYSLOGD-DEMAND-$$" 2>/dev/null || true
-    _i=0
-    while [ $_i -lt 20 ]; do
-        pgrep -x syslogd >/dev/null 2>&1 && break
-        sleep 1
-        _i=$((_i + 1))
-    done
-    echo "SYSLOGD-DEMAND: poked com.apple.system.logger, waited ${_i}s"
-else
-    echo "SYSLOGD-DEMAND: $_demand_logger missing, cannot trigger on-demand start"
-fi
-
 if pgrep -x syslogd >/dev/null 2>&1; then
     echo "SYSLOGD-PROC-OK: syslogd running as pid $(pgrep -x syslogd)"
 else
