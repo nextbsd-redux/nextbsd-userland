@@ -2464,7 +2464,32 @@ system_specific_bootstrap(bool sflag)
 
 	preheat_page_cache_hack();
 
-	_vproc_set_global_on_demand(true);
+	/*
+	 * NextBSD: do NOT bracket the load in global-on-demand.
+	 *
+	 * Apple sets it here so on-demand jobs cannot start while the bulk
+	 * import is in flight, then clears it afterwards. Their own comment
+	 * on the launchd side calls it a hack:
+	 *
+	 *     5066316
+	 *     We definitely need to revisit this after Leopard ships.
+	 *     Please see launchctl.c for the other half of this hack.
+	 *     -- core.c, job_keepalive()
+	 *
+	 * It actively breaks this port. syslogd has no RunAtLoad -- it was
+	 * removed over the launch_msg(LAUNCH_KEY_CHECKIN) Mach hang -- so it
+	 * is purely on-demand via com.apple.system.logger. Its launch trigger
+	 * fires during the import, job_keepalive() refuses it because
+	 * global_on_demand_cnt > 0, and the release path
+	 * (jobmgr_dispatch_all -> job_dispatch(ji, false)) does not kick off
+	 * an on-demand job with no pending demand. The trigger is swallowed
+	 * and syslogd never starts.
+	 *
+	 * PID 1's in-process scan never set this flag, which is why the
+	 * problem only appears when the bootstrapper does the loading.
+	 * Importing without it simply lets jobs start as they are imported --
+	 * the behaviour the scan has always had.
+	 */
 
 	char *load_launchd_items[] = { "load", "-D", "all", NULL };
 	int load_launchd_items_cnt = 3;
@@ -2485,7 +2510,7 @@ system_specific_bootstrap(bool sflag)
 
 	do_bootroot_magic();
 
-	_vproc_set_global_on_demand(false);
+	/* No global-on-demand to clear; see the note above the load. */
 
 	(void)posix_assumes_zero(kevent(kq, NULL, 0, &kev, 1, NULL));
 
