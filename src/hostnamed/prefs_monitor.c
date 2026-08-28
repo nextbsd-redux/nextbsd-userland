@@ -75,6 +75,33 @@ read_prefs_computer_name(SCPreferencesRef prefs)
 	return (name);
 }
 
+/* Read the configured ComputerName straight from SCPrefs, without
+ * requiring prefs_monitor_start() to have run yet.
+ *
+ * hostnamed's boot-time sethostname() used to call
+ * freebsd_synthesize_hostname() unconditionally, so a machine with a
+ * configured name was called by its synthesised name for the first few
+ * seconds of every boot -- including in getty's banner, which is the very
+ * thing that boot-time set exists to get right (#66). Reading SCPrefs here
+ * costs one plist open and removes the wrong-name window entirely.
+ *
+ * Caller releases. NULL when unset or unreadable, in which case the caller
+ * falls back to synthesis exactly as before. */
+CFStringRef
+prefs_monitor_copy_configured_name(void)
+{
+	SCPreferencesRef prefs;
+	CFStringRef name;
+
+	prefs = SCPreferencesCreate(NULL,
+	    CFSTR("com.apple.hostnamed.bootread"), CFSTR("preferences.plist"));
+	if (prefs == NULL)
+		return (NULL);
+	name = read_prefs_computer_name(prefs);
+	CFRelease(prefs);
+	return (name);
+}
+
 /* Returns the SCPrefs ComputerName if set, otherwise NULL. The
  * caller distinguishes "publish this value" from "unpublish so the
  * engine falls through to DHCP / PTR / mDNS / freebsd_synthesize
