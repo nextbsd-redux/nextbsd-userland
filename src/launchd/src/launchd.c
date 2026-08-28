@@ -383,13 +383,10 @@ main(int argc, char *const *argv)
  * Apple's launchd performs the read-write transition itself, in
  * launchctl's do_potential_fsck(), run before the LaunchDaemons scan.
  *
- * NOTE: contrary to what this comment used to claim, that bootstrapper was
- * NOT dropped -- jobmgr_init_session() (core.c) still submits
- * com.apple.launchctl.System, and it still runs do_potential_fsck(). So the
- * root remount is currently performed twice per boot, concurrently. Doing it
- * here is what guarantees / is writable before any LaunchDaemon is
- * dispatched; the duplicate in the bootstrapper is redundant work that
- * should be removed separately (issue #70).
+ * This port no longer submits that bootstrapper: jobmgr_init_session() skips
+ * com.apple.launchctl.System for the PID-1 System session (core.c, #70), so
+ * do_potential_fsck() no longer runs behind our back. The remount happens
+ * exactly once, here, before any LaunchDaemon is dispatched.
  *
  * Filesystem-agnostic: statfs() reports the mounted type and fsck(8) /
  * mount(8) dispatch on it. Works for UFS today; a future root on any

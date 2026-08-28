@@ -7159,8 +7159,36 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
 	}
 
-	if (name && !skip_init) {
+	/*
+	 * NextBSD (#70): do not submit the System-session bootstrapper.
+	 *
+	 * com.apple.launchctl.System runs launchctl's
+	 * system_specific_bootstrap(), which empties /var/run and /tmp and
+	 * then does its own `load -D all`. But PID 1 already loads the
+	 * LaunchDaemons itself (launchd_scan_launchdaemons(), launchd.c) and
+	 * now also does the boot-dir cleanup and the root remount inline. So
+	 * the bootstrapper contributes nothing except duplicated work -- and
+	 * it is actively harmful: PID 1 dispatches it from the same scan that
+	 * started the other daemons, so its wipe ran concurrently with them
+	 * and deleted live sockets and pidfiles.
+	 *
+	 * c5eebaf added the in-process scan believing this job had already
+	 * been dropped. It had not. This makes that true.
+	 *
+	 * Only the PID-1 root manager's System session is affected; per-user
+	 * and sub-manager sessions still get their bootstrapper.
+	 */
+	bool skip_system_bootstrapper = (pid1_magic && jm == NULL &&
+	    name != NULL &&
+	    strcmp(name, VPROCMGR_SESSION_SYSTEM) == 0);
+
+	if (name && !skip_init && !skip_system_bootstrapper) {
 		bootstrapper = jobmgr_init_session(jmr, name, sflag);
+	} else if (name && !skip_init && skip_system_bootstrapper) {
+		/* jobmgr_init_session() would have set this; preserve it. */
+		jmr->session_initialized = true;
+		jobmgr_log(jmr, LOG_NOTICE, "System bootstrapper suppressed -- "
+		    "PID 1 owns the boot-dir cleanup and the LaunchDaemons scan");
 	}
 
 	if (!bootstrapper || !bootstrapper->weird_bootstrap) {
