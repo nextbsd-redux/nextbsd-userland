@@ -349,9 +349,45 @@ main(int argc, char *const *argv)
 				    "(kernel.log_open=1; console quiet)");
 		}
 
-		launchd_scan_launchdaemons();
+		/*
+		 * PROOF OF CONCEPT (#70 option C) -- the in-process scan is
+		 * disabled here on purpose.
+		 *
+		 * Apple's launchd does not scan LaunchDaemons itself. It
+		 * creates one job, com.apple.launchctl.System
+		 * (jobmgr_init_session(), core.c), and that job runs
+		 * `launchctl bootstrap -S System`, which does the whole boot
+		 * sequence inside a single process and in order:
+		 *
+		 *     empty_dir(/var/run); empty_dir(/tmp)   -- clean
+		 *     do_potential_fsck()                    -- remount
+		 *     load -D all                            -- then load
+		 *
+		 * Because one program does the cleanup and the loading in
+		 * sequence, the wipe cannot overlap a running daemon. The
+		 * race in #70 exists only because this port added a second
+		 * loader here, so the bootstrapper ends up being dispatched
+		 * BY the scan it duplicates.
+		 *
+		 * c5eebaf added this scan after a boot stall, on the belief
+		 * that no infrastructure existed to start the LaunchDaemons.
+		 * The infrastructure was there, vendored, and it runs on
+		 * every boot today. What is NOT yet known is whether its
+		 * `load -D all` actually loads anything in this port: the
+		 * scan has always imported the plists first, so every import
+		 * the bootstrapper attempts hits EEXIST and a broken loader
+		 * would look identical to a working one.
+		 *
+		 * This POC removes the scan so CI's boot test answers that
+		 * question. If the daemons come up, the port can drop the
+		 * scan entirely and run Apple's sequence. If the boot stalls
+		 * at "launchd[1] has started up", the bootstrapper's loader
+		 * is broken, that is why the 2026-05 hack was written, and
+		 * the scan has to stay -- in which case fix #71 or #72.
+		 */
 		launchd_syslog(LOG_NOTICE | LOG_CONSOLE,
-		    "post-scan: entering launchd_runtime() event loop");
+		    "POC(#70c): in-process LaunchDaemons scan DISABLED -- "
+		    "relying on com.apple.launchctl.System (Apple's path)");
 	}
 
 	launchd_runtime_init2();
