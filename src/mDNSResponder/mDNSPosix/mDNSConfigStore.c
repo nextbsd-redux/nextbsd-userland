@@ -277,8 +277,20 @@ fill_domainlabel(domainlabel *label, const char *s)
 }
 
 /* Debounce-fire handler. Reads the SCDS labels, compares them to the
- * cached labels on mDNSStorage, and on change calls mDNS_SetFQDN(m)
- * under mDNS_Lock — Apple's pattern (mDNSMacOSX.c:4239-4246). */
+ * cached labels on mDNSStorage, and on change calls mDNS_SetFQDN(m).
+ *
+ * The label compare and assignment happen under mDNS_Lock, but
+ * mDNS_SetFQDN() is called AFTER mDNS_Unlock(): mDNS_SetFQDN takes the
+ * lock itself, so calling it while already holding the lock is a
+ * double-lock. The core detects it and logs
+ *
+ *   Lock failure: Lock, last lock holder still holds the lock -
+ *     caller: mDNS_SetFQDN, last successful lock holder:
+ *     mDNSConfigStoreRecompute
+ *
+ * and then leaves the daemon in a state where it keeps servicing the
+ * network but stops accepting client connections — every client gets
+ * -65563 kDNSServiceErr_ServiceNotRunning until the daemon restarts. */
 static void
 mDNSConfigStoreRecompute(void *info)
 {
@@ -317,6 +329,9 @@ mDNSConfigStoreRecompute(void *info)
 		m->nicelabel = new_nice;
 		changed = TRUE;
 	}
+	mDNS_Unlock(m);
+
+	/* Outside the lock — mDNS_SetFQDN() acquires it itself. */
 	if (changed) {
 		(void)fprintf(stderr, "mDNSResponder mDNSConfigStore: "
 		    "hostname change -> hostlabel='%s' nicelabel='%s' — "
@@ -324,7 +339,6 @@ mDNSConfigStoreRecompute(void *info)
 		(void)fflush(stderr);
 		mDNS_SetFQDN(m);
 	}
-	mDNS_Unlock(m);
 }
 
 /* Convert a domainlabel (length-prefixed, label->c[0] = length) to a
