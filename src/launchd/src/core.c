@@ -1665,7 +1665,12 @@ job_set_global_on_demand(job_t j, bool val)
 		j->mgr->global_on_demand_cnt--;
 	}
 
+	job_log(j, LOG_NOTICE | LOG_CONSOLE, "BSTRAP-DIAG: global_on_demand %s -> cnt=%u",
+	    val ? "SET" : "CLEARED", j->mgr->global_on_demand_cnt);
+
 	if (j->mgr->global_on_demand_cnt == 0) {
+		job_log(j, LOG_NOTICE | LOG_CONSOLE,
+		    "BSTRAP-DIAG: cnt reached 0 -> jobmgr_dispatch_all() (releasing all jobs)");
 		jobmgr_dispatch_all(j->mgr, false);
 	}
 

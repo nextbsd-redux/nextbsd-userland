@@ -2464,7 +2464,11 @@ system_specific_bootstrap(bool sflag)
 
 	preheat_page_cache_hack();
 
-	_vproc_set_global_on_demand(true);
+	{
+		vproc_err_t ode = _vproc_set_global_on_demand(true);
+		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: set_global_on_demand(true) -> %s",
+		    ode == NULL ? "ok" : "FAILED");
+	}
 
 	char *load_launchd_items[] = { "load", "-D", "all", NULL };
 	int load_launchd_items_cnt = 3;
@@ -2473,7 +2477,13 @@ system_specific_bootstrap(bool sflag)
 		load_launchd_items[2] = "system";
 	}
 
-	(void)posix_assumes_zero(load_and_unload_cmd(load_launchd_items_cnt, load_launchd_items));
+	launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: calling load -D %s", load_launchd_items[2]);
+	{
+		int lrc = load_and_unload_cmd(load_launchd_items_cnt, load_launchd_items);
+		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: load -D %s returned %d",
+		    load_launchd_items[2], lrc);
+		(void)posix_assumes_zero(lrc);
+	}
 
 	/* See <rdar://problem/5066316>. */
 	if (!_launchctl_apple_internal) {
@@ -2485,8 +2495,14 @@ system_specific_bootstrap(bool sflag)
 
 	do_bootroot_magic();
 
-	_vproc_set_global_on_demand(false);
+	{
+		vproc_err_t ode = _vproc_set_global_on_demand(false);
+		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: set_global_on_demand(false) -> %s "
+		    "(this is what releases every loaded job)",
+		    ode == NULL ? "ok" : "FAILED");
+	}
 
+	launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: bootstrap sequence complete, blocking on kevent");
 	(void)posix_assumes_zero(kevent(kq, NULL, 0, &kev, 1, NULL));
 
 	/* warmd now handles cutting off the BootCache. We just kick it off. */
