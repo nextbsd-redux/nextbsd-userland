@@ -2466,7 +2466,7 @@ system_specific_bootstrap(bool sflag)
 
 	{
 		vproc_err_t ode = _vproc_set_global_on_demand(true);
-		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: set_global_on_demand(true) -> %s",
+		fprintf(stderr, "BSTRAP-DIAG: set_global_on_demand(true) -> %s\n",
 		    ode == NULL ? "ok" : "FAILED");
 	}
 
@@ -2477,10 +2477,10 @@ system_specific_bootstrap(bool sflag)
 		load_launchd_items[2] = "system";
 	}
 
-	launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: calling load -D %s", load_launchd_items[2]);
+	fprintf(stderr, "BSTRAP-DIAG: calling load -D %s\n", load_launchd_items[2]);
 	{
 		int lrc = load_and_unload_cmd(load_launchd_items_cnt, load_launchd_items);
-		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: load -D %s returned %d",
+		fprintf(stderr, "BSTRAP-DIAG: load -D %s returned %d\n",
 		    load_launchd_items[2], lrc);
 		(void)posix_assumes_zero(lrc);
 	}
@@ -2497,12 +2497,11 @@ system_specific_bootstrap(bool sflag)
 
 	{
 		vproc_err_t ode = _vproc_set_global_on_demand(false);
-		launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: set_global_on_demand(false) -> %s "
-		    "(this is what releases every loaded job)",
+		fprintf(stderr, "BSTRAP-DIAG: set_global_on_demand(false) -> %s\n",
 		    ode == NULL ? "ok" : "FAILED");
 	}
 
-	launchctl_log(LOG_NOTICE, "BSTRAP-DIAG: bootstrap sequence complete, blocking on kevent");
+	fprintf(stderr, "BSTRAP-DIAG: bootstrap sequence complete, blocking on kevent\n");
 	(void)posix_assumes_zero(kevent(kq, NULL, 0, &kev, 1, NULL));
 
 	/* warmd now handles cutting off the BootCache. We just kick it off. */
@@ -2736,8 +2735,10 @@ load_and_unload_cmd(int argc, char *const argv[])
 	lus.pass1 = launch_data_alloc(LAUNCH_DATA_ARRAY);
 
 	es = NSStartSearchPathEnumeration(NSLibraryDirectory, es);
+	fprintf(stderr, "BSTRAP-DIAG: starting NSLibraryDirectory enumeration\n");
 
 	while ((es = NSGetNextSearchPathEnumeration(es, nspath))) {
+		fprintf(stderr, "BSTRAP-DIAG: enumeration yielded base '%s'\n", nspath);
 		if (lus.session_type) {
 			strcat(nspath, "/LaunchAgents");
 		} else {
@@ -2772,9 +2773,14 @@ load_and_unload_cmd(int argc, char *const argv[])
 
 		if (should_glob) {
 			glob_t g;
+			int grc = glob(nspath, GLOB_TILDE|GLOB_NOSORT, NULL, &g);
 
-			if (glob(nspath, GLOB_TILDE|GLOB_NOSORT, NULL, &g) == 0) {
+			fprintf(stderr, "BSTRAP-DIAG: domain path '%s' glob rc=%d matches=%zu\n",
+			    nspath, grc, grc == 0 ? (size_t)g.gl_pathc : (size_t)0);
+
+			if (grc == 0) {
 				for (i = 0; i < g.gl_pathc; i++) {
+					fprintf(stderr, "BSTRAP-DIAG:   readpath(%s)\n", g.gl_pathv[i]);
 					readpath(g.gl_pathv[i], &lus);
 				}
 				globfree(&g);
