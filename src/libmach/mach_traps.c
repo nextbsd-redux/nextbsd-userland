@@ -779,58 +779,83 @@ mig_dealloc_reply_port(mach_port_t port)
 	(void)pthread_setspecific(mig_reply_port_key, (void *)MACH_PORT_NULL);
 }
 
+/*
+ * mig_allocate — mmap, matching vm_allocate.
+ *
+ * This used to malloc, which is what forced both mig_deallocate and
+ * vm_deallocate to be no-ops: the same deallocator name was reachable with
+ * buffers from two different allocators, and calling free() on an mmap'd
+ * region (or munmap() on a malloc'd one) crashes. With both allocators
+ * mmap-based the ambiguity is gone and the deallocators can do real work.
+ */
 kern_return_t
 mig_allocate(vm_address_t *addr, vm_size_t size)
 {
-	void *p = malloc((size_t)size);
-	if (p == NULL)
+	void *p;
+
+	if (addr == NULL || size == 0)
+		return KERN_INVALID_ARGUMENT;
+	p = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
+	if (p == MAP_FAILED)
 		return KERN_RESOURCE_SHORTAGE;
 	*addr = (vm_address_t)(uintptr_t)p;
 	return KERN_SUCCESS;
 }
 
 /*
- * mig_deallocate — same shape of trap vm_deallocate already documents
- * a few lines down: the same name gets called on buffers from two
- * different allocators, and using one of them on the wrong source
- * crashes hard.
+ * mach_ool_unmap — the one place that decides whether a pointer handed to
+ * vm_deallocate/mig_deallocate is safe to munmap.
  *
- *   - Server side (e.g. launchd PID 1 packing an OOL response):
- *     mig_allocate above returns a malloc'd buffer; after the MIG
- *     send the server mig_deallocate's that buffer. malloc -> free.
- *   - Client side (e.g. launchctl receiving the OOL response): the
- *     pointer is an INTERIOR offset into the kernel-handed-back
- *     mmap'd Mach message body (not page-aligned, not the base of
- *     anything our libc can free), and the size that comes back can
- *     be the server's full payload, not the receive-buffer size.
- *     free() on this walks jemalloc's arena metadata into garbage
- *     and segfaults; munmap fails too (interior pointer).
+ * Everything that legitimately reaches those two now comes from an mmap:
+ * vm_allocate, mig_allocate above, or the kernel's own copyout of received
+ * out-of-line memory. The one exception is an INTERIOR pointer into a
+ * kernel-mapped message body, which vproc_swap_complex hands back (see
+ * 9fe3d79) -- munmap would fail on it anyway, since it is neither a mapping
+ * base nor page-aligned.
  *
- * `launchctl list` (vproc_swap_complex -> mig_deallocate at the
- * cleanup label) hit the client path and crashed in libc free
- * walking arena state. Confirmed with lldb on bsd01: rdi was an
- * interior pointer 0x5110 bytes into a 576 KiB rw- mmap region,
- * declared size was 7.6 MiB (the server payload, larger than the
- * actually-mapped region) — neither free nor munmap can do anything
- * useful with that.
+ * So: require page alignment before unmapping. That admits every real base
+ * and rejects every interior offset, and munmap's own EINVAL is a second
+ * line of defence rather than the only one. A non-aligned pointer is left
+ * alone, exactly as before -- a bounded leak on that one path instead of a
+ * crash on all of them.
+ */
+static kern_return_t
+mach_ool_unmap(vm_address_t addr, vm_size_t size)
+{
+	long pagesize;
+
+	if (addr == 0 || size == 0)
+		return KERN_SUCCESS;
+
+	pagesize = sysconf(_SC_PAGESIZE);
+	if (pagesize <= 0)
+		return KERN_SUCCESS;
+
+	if ((uintptr_t)addr % (uintptr_t)pagesize != 0)
+		return KERN_SUCCESS;	/* interior pointer; not ours to unmap */
+
+	/* KERN_FAILURE, not KERN_INVALID_ADDRESS: libmach's kern_return.h
+	 * defines only SUCCESS/FAILURE/ABORTED/NOT_SUPPORTED/TIMED_OUT, and
+	 * this is the code mach_vm_deallocate already returned for a failed
+	 * munmap. */
+	if (munmap((void *)(uintptr_t)addr, (size_t)size) != 0)
+		return KERN_FAILURE;
+	return KERN_SUCCESS;
+}
+
+/*
+ * mig_deallocate — release OOL memory handed back by a MIG reply.
  *
- * Take the same trade vm_deallocate already takes: no-op + bounded
- * leak. The server-side leak (launchd PID 1's malloc-based OOL
- * response buffers) is the unbounded one if you measure it over
- * months of daemon uptime; OOL responses are KB-to-low-MB each, so
- * accumulation is measured in low-MB-per-day for an active system.
- * The proper fix is to make mig_allocate mmap-based (matching
- * vm_allocate) AND fix the OOL-receive path to hand back a true
- * base pointer + true mapped size, so a real munmap can run on both
- * sides. That's mach_msg surgery; do it when the leak budget shows
- * up as a real problem, not before.
+ * Was a no-op. mig_allocate now mmaps, so server-side buffers and
+ * kernel-copied-out OOL memory are both real mappings and both can be
+ * unmapped; mach_ool_unmap() screens out the interior-pointer case that
+ * forced the no-op originally.
  */
 kern_return_t
 mig_deallocate(vm_address_t addr, vm_size_t size)
 {
-	(void)addr;
-	(void)size;
-	return KERN_SUCCESS;
+	return mach_ool_unmap(addr, size);
 }
 
 int
@@ -846,11 +871,19 @@ mig_strncpy(char *dst, const char *src, int len)
 	return n;
 }
 
-/* vm_allocate / vm_deallocate — Mach VM API surface. vm_allocate uses
- * mmap so callers can rely on getting a real anonymous mapping;
- * vm_deallocate is a no-op because the same name is sometimes called
- * on malloc'd buffers (from mig_allocate), where munmap would crash.
- * Bounded leak — MIG out-of-line messages are KB-sized at most. */
+/*
+ * vm_allocate / vm_deallocate — Mach VM API surface.
+ *
+ * vm_deallocate was a no-op because the same name could be reached with
+ * malloc'd buffers from the old mig_allocate. That is fixed at the source:
+ * mig_allocate mmaps now, so every buffer reaching here is a real mapping.
+ *
+ * This matters beyond MIG. libsystem_asl allocates its ASL_STRING_VM buffers
+ * with vm_allocate and releases them with vm_deallocate (asl_string.c:78,111,
+ * 187), correctly distinguishing them from its malloc'd ones -- so with the
+ * no-op in place ASL was leaking an mmap on every message send path, not just
+ * on the MIG paths.
+ */
 kern_return_t
 vm_allocate(mach_port_name_t target, vm_address_t *address,
     vm_size_t size, int flags)
@@ -872,9 +905,7 @@ kern_return_t
 vm_deallocate(mach_port_name_t task, vm_address_t addr, vm_size_t size)
 {
 	(void)task;
-	(void)addr;
-	(void)size;
-	return (KERN_SUCCESS);
+	return mach_ool_unmap(addr, size);
 }
 
 /* Additional mach_port stubs. */
@@ -1103,11 +1134,9 @@ mach_vm_deallocate(mach_port_name_t target, mach_vm_address_t address,
     mach_vm_size_t size)
 {
 	(void)target;
-	if (size == 0)
-		return (KERN_SUCCESS);
-	if (munmap((void *)(uintptr_t)address, (size_t)size) != 0)
-		return (KERN_FAILURE);
-	return (KERN_SUCCESS);
+	/* Same screening as vm_deallocate: this was an unguarded munmap, which
+	 * would fault rather than fail on an interior pointer. */
+	return mach_ool_unmap((vm_address_t)address, (vm_size_t)size);
 }
 
 /*
