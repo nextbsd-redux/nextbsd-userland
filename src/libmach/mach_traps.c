@@ -435,18 +435,27 @@ mach_port_get_attributes(mach_port_name_t task, mach_port_name_t name,
     mach_port_flavor_t flavor, mach_port_info_t info,
     mach_msg_type_number_t *infoCnt)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_get_attributes(task, name, flavor, info,
+	    infoCnt);
+#else
 	(void)task; (void)name; (void)flavor; (void)info;
 	if (infoCnt != NULL)
 		*infoCnt = 0;
 	return KERN_RESOURCE_SHORTAGE;
+#endif
 }
 
 kern_return_t
 mach_port_mod_refs(mach_port_name_t task, mach_port_name_t name,
     mach_port_right_t right, mach_port_delta_t delta)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_mod_refs(task, name, right, delta);
+#else
 	(void)task; (void)name; (void)right; (void)delta;
 	return KERN_SUCCESS;
+#endif
 }
 
 /*
@@ -540,8 +549,12 @@ kern_return_t
 mach_port_set_mscount(mach_port_name_t task, mach_port_name_t name,
     mach_port_mscount_t mscount)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_set_mscount(task, name, mscount);
+#else
 	(void)task; (void)name; (void)mscount;
 	return KERN_SUCCESS;
+#endif
 }
 
 /*
@@ -878,24 +891,57 @@ vm_deallocate(mach_port_name_t task, vm_address_t addr, vm_size_t size)
 }
 
 /* Additional mach_port stubs. */
+/*
+ * mach_port MIG client (#83).
+ *
+ * These entry points used to fabricate success -- returning empty results or
+ * KERN_SUCCESS without doing anything -- because there was no MIG client to
+ * call. mach_port_get_set_status and mach_port_get_attributes between them
+ * are why on-demand Mach-service launch was dead (#79): mportset_callback()
+ * needs BOTH, and each failed independently.
+ *
+ * The generated stubs are named _kernelrpc_mach_port_* (UserPrefix in
+ * mach_port.defs), so they sit underneath these public entry points rather
+ * than colliding with them -- the libsyscall arrangement.
+ *
+ * LIBMACH_HAVE_MIG_CLIENT is defined by the Makefile only when MIGOUT
+ * supplied mach_portUser.c. Without it a bare `make -C src/libmach` still
+ * builds, keeping the previous behaviour, so the header-install path and
+ * quick local builds are unaffected.
+ */
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+#include "mach_port_mig.h"
+#endif
+
 kern_return_t
 mach_port_get_set_status(mach_port_name_t task, mach_port_name_t name,
     mach_port_name_array_t *members, mach_msg_type_number_t *membersCnt)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_get_set_status(task, name, members,
+	    membersCnt);
+#else
 	(void)task; (void)name;
 	if (members != NULL)
 		*members = NULL;
 	if (membersCnt != NULL)
 		*membersCnt = 0;
 	return KERN_SUCCESS;
+#endif
 }
 
 kern_return_t
 mach_port_set_context(mach_port_name_t task, mach_port_name_t name,
     mach_port_context_t context)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	/* Widening a value, not aliasing a pointer -- safe either way. */
+	return _kernelrpc_mach_port_set_context(task, name,
+	    (mach_vm_address_t)context);
+#else
 	(void)task; (void)name; (void)context;
 	return KERN_SUCCESS;
+#endif
 }
 
 /*
@@ -967,10 +1013,31 @@ kern_return_t
 mach_port_get_context(mach_port_name_t task, mach_port_name_t name,
     mach_port_context_t *context)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	{
+		/*
+		 * The wire type is mach_vm_address_t (uint64_t); the public
+		 * API uses mach_port_context_t (uintptr_t). Same width on
+		 * LP64, but distinct types -- WARNS=6 rejects aliasing the
+		 * pointers, so bridge through a local rather than casting the
+		 * pointer, which would be wrong if the widths ever diverge.
+		 */
+		mach_vm_address_t ctx = 0;
+		kern_return_t kr;
+
+		if (context == NULL)
+			return KERN_INVALID_ARGUMENT;
+		kr = _kernelrpc_mach_port_get_context(task, name, &ctx);
+		if (kr == KERN_SUCCESS)
+			*context = (mach_port_context_t)ctx;
+		return kr;
+	}
+#else
 	(void)task; (void)name;
 	if (context != NULL)
 		*context = 0;
 	return KERN_SUCCESS;
+#endif
 }
 
 /*
@@ -1121,15 +1188,22 @@ kern_return_t
 mach_port_type(mach_port_name_t task, mach_port_name_t name,
     mach_port_type_t *type)
 {
-	(void)task;
 	if (type == NULL)
 		return (KERN_INVALID_ARGUMENT);
 	if (name == MACH_PORT_NULL || name == MACH_PORT_DEAD) {
 		*type = 0;
 		return (KERN_INVALID_NAME);
 	}
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_type(task, name, type);
+#else
+	/* Previously answered MACH_PORT_TYPE_RECEIVE for every valid name --
+	 * not merely incomplete but wrong, since it claims a receive right the
+	 * caller may not hold. */
+	(void)task;
 	*type = MACH_PORT_TYPE_RECEIVE;
 	return (KERN_SUCCESS);
+#endif
 }
 
 /*

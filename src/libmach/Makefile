@@ -21,6 +21,17 @@ SHLIB_MAJOR=	0
 SRCS=		mach_traps.c \
 		dispatch_kevent.c
 
+# MIGOUT — generated mach_port MIG client (mach_portUser.c), produced by
+# build-userland.sh from the kernel's mach_port.defs. Optional so a bare
+# `make -C src/libmach` still works for header installs and quick builds;
+# without it the _kernelrpc_mach_port_* stubs are absent and the entry points
+# in mach_traps.c fall back to their pre-MIG behaviour (see the MIG_CLIENT
+# guard there).
+.if defined(MIGOUT) && exists(${MIGOUT}/mach_portUser.c)
+SRCS+=		${MIGOUT}/mach_portUser.c
+CFLAGS+=	-I${MIGOUT} -DLIBMACH_HAVE_MIG_CLIENT=1
+.endif
+
 CFLAGS+=	-I${.CURDIR}/include
 NO_MAN=		yes
 WARNS?=		6

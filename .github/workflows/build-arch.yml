@@ -58,6 +58,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # mach_port.defs lives in nextbsd-kernel, deliberately: it describes the
+      # WIRE, and a wire needs exactly one description or the two ends drift --
+      # which is the failure nextbsd-kernel#125 exists to remove. The kernel
+      # generates its server from this same file; we generate the libmach
+      # client from it. Symmetric with nextbsd-kernel's own build, which checks
+      # out THIS repo to build migcom.
+      - name: Checkout nextbsd-kernel (mach_port.defs for the libmach client)
+        uses: actions/checkout@v4
+        with:
+          repository: nextbsd-redux/nextbsd-kernel
+          ref: main
+          path: .kernel
+
       # (A) Stage the cross SYSROOT from compat's `continuous` base — the built
       #     libc/libsys/libs (+ headers) the Darwin stack links against. HARD
       #     dependency: userland is downstream of compat.

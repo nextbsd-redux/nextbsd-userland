@@ -258,11 +258,58 @@ export SYSROOT
 # the deferral is unnecessary AND harmful: with HAVE_MACH=ON, libdispatch's
 # SOURCES (mach_private.h) #include <mach/mach.h> and need it present to compile.
 # So we keep mach.h installed (no removal).
+# ---- libmach MIG client (mach_port) -----------------------------------------
+# Generate the mach_port MIG client from the kernel's mach_port.defs, so the
+# libmach entry points that used to fabricate success are real RPCs
+# (nextbsd-kernel#125, #83).
+#
+# The .defs lives in nextbsd-kernel, deliberately: it describes the WIRE, and
+# a wire needs exactly one description or the two ends can drift -- which is
+# the whole failure this work removes. The kernel repo generates its server
+# from the same file. This mirrors nextbsd-kernel's own build, which checks
+# out THIS repo to build migcom.
+#
+# UserPrefix _kernelrpc_ in that .defs means the generated stubs are named
+# _kernelrpc_mach_port_*, so they sit underneath the public entry points in
+# mach_traps.c rather than colliding with them -- the libsyscall arrangement.
+KERNEL_DEFS="${KERNEL_DEFS:-$ROOT/.kernel}"
+LIBMACH_MIG="$MIGROOT/libmach"
+rm -rf "$LIBMACH_MIG"; mkdir -p "$LIBMACH_MIG"
+
+if [ ! -f "$KERNEL_DEFS/src-overlay/sys/sys/mach/mach_port.defs" ]; then
+    echo "FAIL: mach_port.defs not found under KERNEL_DEFS=$KERNEL_DEFS"
+    echo "      Expected a nextbsd-kernel checkout; CI provides one, and a"
+    echo "      local build can point KERNEL_DEFS at its own clone."
+    exit 1
+fi
+
+# mach_debug_types.defs is included by mach_port.defs and also lives kernel-side.
+MIGTMP="$LIBMACH_MIG/incl"
+mkdir -p "$MIGTMP/mach" "$MIGTMP/mach_debug"
+cp "$SRC/libmach/include/mach/"*.defs "$MIGTMP/mach/"
+cp "$KERNEL_DEFS/src-overlay/sys/sys/mach/mach_port.defs" "$MIGTMP/mach/"
+cp "$KERNEL_DEFS/src-overlay/sys/sys/mach_debug/mach_debug_types.defs" "$MIGTMP/mach_debug/"
+
+run_mig "$LIBMACH_MIG" -I"$MIGTMP" \
+    -header mach_port_mig.h -user mach_portUser.c \
+    -server /dev/null \
+    "$MIGTMP/mach/mach_port.defs" \
+    || { echo "FAIL: mig could not process mach_port.defs"; exit 1; }
+test -s "$LIBMACH_MIG/mach_portUser.c" \
+    || { echo "FAIL: mig produced no mach_portUser.c"; exit 1; }
+# The prefix is load-bearing: without it these would collide with the public
+# entry points. Assert it rather than trust it.
+grep -q '_kernelrpc_mach_port_get_set_status' "$LIBMACH_MIG/mach_portUser.c" \
+    || { echo "FAIL: mach_portUser.c has no _kernelrpc_ stubs -- UserPrefix missing?"; exit 1; }
+grep -qE '^mach_port_get_set_status\(' "$LIBMACH_MIG/mach_portUser.c" \
+    && { echo "FAIL: mach_portUser.c defines UNPREFIXED entry points; would collide"; exit 1; }
+echo "==> LIBMACH-MIG-OK: $(wc -l < "$LIBMACH_MIG/mach_portUser.c") lines of mach_port client"
+
 comp "libmach (libsystem_kernel) — installs mach/* headers into sysroot first"
 mkdir -p "$DESTDIR/usr/lib/system" \
          "$DESTDIR/usr/include/mach" \
          "$DESTDIR/usr/libdata/pkgconfig"
-run_buildenv "make -C $SRC/libmach DESTDIR=$DESTDIR PREFIX=/usr all install"
+run_buildenv "make -C $SRC/libmach DESTDIR=$DESTDIR PREFIX=/usr MIGOUT=$LIBMACH_MIG all install"
 # Headers also need to be visible in the SYSROOT (not just DESTDIR) for the
 # cross compiles of every later component that does -I\$SYSROOT/usr/include.
 # DESTDIR==/stage and SYSROOT are distinct; mirror libmach's headers across.
