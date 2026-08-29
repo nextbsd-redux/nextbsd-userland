@@ -33,17 +33,29 @@
  */
 
 #define MACH_NOTIFY_FIRST		0100
+#ifndef MACH_NOTIFY_PORT_DELETED
 #define MACH_NOTIFY_PORT_DELETED	(MACH_NOTIFY_FIRST + 001 )
+#endif
 			/* A send or send-once right was deleted. */
+#ifndef MACH_NOTIFY_PORT_DESTROYED
 #define MACH_NOTIFY_PORT_DESTROYED	(MACH_NOTIFY_FIRST + 005)
+#endif
 			/* A receive right was (would have been) deallocated */
+#ifndef MACH_NOTIFY_NO_SENDERS
 #define MACH_NOTIFY_NO_SENDERS		(MACH_NOTIFY_FIRST + 006)
+#endif
 			/* Receive right has no extant send rights */
+#ifndef MACH_NOTIFY_SEND_ONCE
 #define MACH_NOTIFY_SEND_ONCE		(MACH_NOTIFY_FIRST + 007)
+#endif
 			/* An extant send-once right died */
+#ifndef MACH_NOTIFY_DEAD_NAME
 #define MACH_NOTIFY_DEAD_NAME		(MACH_NOTIFY_FIRST + 010)
+#endif
 			/* Send or send-once right died, leaving a dead-name */
+#ifndef MACH_NOTIFY_LAST
 #define MACH_NOTIFY_LAST		(MACH_NOTIFY_FIRST + 015)
+#endif
 
 typedef struct {
     mach_msg_header_t	not_header;

@@ -24,6 +24,28 @@
 #include <mach/mach_port.h>
 #include <mach/mach_vm.h>	/* mach_vm_allocate / mach_vm_deallocate */
 #include <mach/message.h>
+
+/*
+ * mach_port MIG client (#83).
+ *
+ * These entry points used to fabricate success -- returning empty results or
+ * KERN_SUCCESS without doing anything -- because there was no MIG client to
+ * call. mach_port_get_set_status and mach_port_get_attributes between them
+ * are why on-demand Mach-service launch was dead (#79): mportset_callback()
+ * needs BOTH, and each failed independently.
+ *
+ * The generated stubs are named _kernelrpc_mach_port_* (UserPrefix in
+ * mach_port.defs), so they sit underneath these public entry points rather
+ * than colliding with them -- the libsyscall arrangement.
+ *
+ * LIBMACH_HAVE_MIG_CLIENT is defined by the Makefile only when MIGOUT
+ * supplied mach_portUser.c. Without it a bare `make -C src/libmach` still
+ * builds, keeping the previous behaviour, so the header-install path and
+ * quick local builds are unaffected.
+ */
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+#include "mach_port_mig.h"
+#endif
 #include <mach/ndr.h>
 #include <mach/task_special_ports.h>
 #include <mach/host_special_ports.h>
@@ -891,27 +913,6 @@ vm_deallocate(mach_port_name_t task, vm_address_t addr, vm_size_t size)
 }
 
 /* Additional mach_port stubs. */
-/*
- * mach_port MIG client (#83).
- *
- * These entry points used to fabricate success -- returning empty results or
- * KERN_SUCCESS without doing anything -- because there was no MIG client to
- * call. mach_port_get_set_status and mach_port_get_attributes between them
- * are why on-demand Mach-service launch was dead (#79): mportset_callback()
- * needs BOTH, and each failed independently.
- *
- * The generated stubs are named _kernelrpc_mach_port_* (UserPrefix in
- * mach_port.defs), so they sit underneath these public entry points rather
- * than colliding with them -- the libsyscall arrangement.
- *
- * LIBMACH_HAVE_MIG_CLIENT is defined by the Makefile only when MIGOUT
- * supplied mach_portUser.c. Without it a bare `make -C src/libmach` still
- * builds, keeping the previous behaviour, so the header-install path and
- * quick local builds are unaffected.
- */
-#ifdef LIBMACH_HAVE_MIG_CLIENT
-#include "mach_port_mig.h"
-#endif
 
 kern_return_t
 mach_port_get_set_status(mach_port_name_t task, mach_port_name_t name,
