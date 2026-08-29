@@ -1657,6 +1657,15 @@ kern_return_t __notify_server_checkin
 	audit_token_to_au32(audit, NULL, NULL, NULL, NULL, NULL, &pid, NULL, NULL);
 
 	log_message(ASL_LEVEL_DEBUG, "__notify_server_checkin %d\n", pid);
+	/*
+	 * Also to stderr. log_message() goes through ASL -> syslogd, and syslogd
+	 * is the process wedged on this very RPC, so the one record that proves
+	 * whether we saw its request is routed through the thing the bug breaks.
+	 * (Same self-defeating pattern as #98.) /var/log/notifyd.stderr is
+	 * dumped by the boot diagnostics.
+	 */
+	fprintf(stderr, "notifyd[%d]: CHECKIN from pid %d\n", getpid(), pid);
+	fflush(stderr);
 	*version = NOTIFY_IPC_VERSION;
 	*server_pid = getpid();
 	*status = NOTIFY_STATUS_OK;

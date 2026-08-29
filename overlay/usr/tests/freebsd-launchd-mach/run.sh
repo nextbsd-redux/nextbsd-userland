@@ -1123,6 +1123,14 @@ else
     # actually stalls. syslogd sits in ipc_mqueue_receive waiting on a reply,
     # and the candidates inside that function are distinguishable only here:
     # notify_register_plain (SOURCE_KERN only) vs asl_out_message.
+    # Did notifyd ever SEE syslogd's checkin? That is the question that
+    # separates "message lost before notifyd checked in" from "notifyd
+    # answered and syslogd missed the reply".
+    echo "--- notifyd: serving marker + observed checkins ---"
+    grep -E "CP11|CHECKIN from pid" /var/log/notifyd.stderr 2>/dev/null \
+        | tail -12 | sed 's/^/    /' \
+        || echo "    (no notifyd.stderr markers)"
+
     echo "--- /tmp/process_msg.log (process_message internal trace) ---"
     if [ -f /tmp/process_msg.log ]; then
         tail -20 /tmp/process_msg.log 2>/dev/null | sed 's/^/    /'
