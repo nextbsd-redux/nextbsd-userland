@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -348,20 +349,66 @@ _notify_client_log(int level, const char *fmt, ...)
 }
 
 
+
+/*
+ * Surface internal failures that IS_INTERNAL_ERROR() would otherwise destroy.
+ *
+ * Every status >= 11 is collapsed into NOTIFY_STATUS_FAILED (1000000) before
+ * a caller can see it, and the real code only goes to _notify_client_log(),
+ * i.e. to ASL -- which is precisely the subsystem that is wedged when this
+ * matters. #91 cost several CI cycles guessing between candidates that this
+ * code already knew and threw away.
+ *
+ * Gated on an environment variable so shipped behaviour is unchanged unless
+ * something explicitly asks. stderr, not ASL, so it cannot deadlock against
+ * the thing being diagnosed.
+ */
+static void
+_notify_report_stderr(const char *fmt, ...)
+{
+	static int enabled = -1;
+	va_list ap;
+
+	if (enabled < 0)
+		enabled = (getenv("LIBNOTIFY_DEBUG_ERRORS") != NULL);
+	if (enabled == 0)
+		return;
+
+	va_start(ap, fmt);
+	fputs("libnotify: ", stderr);
+	vfprintf(stderr, fmt, ap);
+	fputc('\n', stderr);
+	va_end(ap);
+	fflush(stderr);
+}
+
 #if !TARGET_OS_SIMULATOR && !TARGET_OS_OSX
 
+/*
+ * do/while(0), not a bare statement list. This macro expands to more than one
+ * statement now, and of its 92 call sites only 68 sit immediately inside a
+ * brace -- an unbraced `if (x) REPORT_BAD_BEHAVIOR(...);` anywhere would
+ * otherwise silently run the tail unconditionally. (The original had the same
+ * hazard: `if/else` followed by `(void)0`.)
+ */
 #define REPORT_BAD_BEHAVIOR(...)							\
-	if(os_variant_has_internal_diagnostics("libnotify.simulate_crash"))		\
-	{										\
-		_simulate_crash(__VA_ARGS__);						\
-	} else {									\
-		_notify_client_log(ASL_LEVEL_ERR, __VA_ARGS__);				\
-	}										\
-	(void)0 // This allows ; after the macro and the compiler will optimize it out
+	do {										\
+		_notify_report_stderr(__VA_ARGS__);					\
+		if(os_variant_has_internal_diagnostics("libnotify.simulate_crash"))	\
+		{									\
+			_simulate_crash(__VA_ARGS__);					\
+		} else {								\
+			_notify_client_log(ASL_LEVEL_ERR, __VA_ARGS__);			\
+		}									\
+	} while (0)
 
 #else /* !TARGET_OS_SIMULATOR && !TARGET_OS_OSX */
 
-#define REPORT_BAD_BEHAVIOR(...) _notify_client_log(ASL_LEVEL_ERR, __VA_ARGS__)
+#define REPORT_BAD_BEHAVIOR(...)							\
+	do {										\
+		_notify_report_stderr(__VA_ARGS__);					\
+		_notify_client_log(ASL_LEVEL_ERR, __VA_ARGS__);				\
+	} while (0)
 
 #endif /* !TARGET_OS_SIMULATOR && !TARGET_OS_OSX */
 

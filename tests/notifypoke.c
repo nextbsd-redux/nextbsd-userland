@@ -35,6 +35,7 @@
 #include <servers/bootstrap.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern uint32_t notify_post(const char *name);
 
@@ -48,6 +49,15 @@ main(int argc, char **argv)
 	mach_port_t sp = MACH_PORT_NULL;
 	kern_return_t kr;
 	uint32_t st;
+
+	/*
+	 * Make libnotify print the internal status it would otherwise destroy.
+	 * IS_INTERNAL_ERROR() collapses every code >= 11 into
+	 * NOTIFY_STATUS_FAILED, and the real one goes only to ASL -- the very
+	 * subsystem that is wedged when this matters. Set before any libnotify
+	 * call so the first failure is already covered.
+	 */
+	setenv("LIBNOTIFY_DEBUG_ERRORS", "1", 1);
 
 	printf("notifypoke: bootstrap_port=0x%x\n", (unsigned)bootstrap_port);
 
