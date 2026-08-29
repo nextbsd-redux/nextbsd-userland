@@ -668,7 +668,7 @@ expect {
         puts "\nFAIL: syslog(1) post/read round-trip failed"
         exit 1
     }
-    "SYSLOG-RUN-SKIP" { puts "\nSKIP: syslog round-trip blocked by launch_msg hang (task #41)" }
+    "SYSLOG-RUN-SKIP" { puts "\nSKIP: syslog round-trip skipped -- syslogd wedged in write_boot_log (known-flaky #78)" }
     "SYSLOG-RUN-OK" { puts "\nOK: syslog round-trip works" }
 }
 
