@@ -843,17 +843,18 @@ done
 # and ASL rotation (#80) stayed broken under a green CI for months. Assert the
 # jobs are actually there, and make the failure fatal.
 #
-# Required set = the RunAtLoad=1 daemons whose absence means userland did not
-# come up. Deliberately EXCLUDED:
-#   com.apple.syslogd     - RunAtLoad dropped, KeepAlive=false; its only trigger
-#                           is MachServices, and on-demand Mach launch is dead
-#                           (#79). Liveness is asserted separately by
-#                           SYSLOGD-PROC-FAIL, which is already fatal.
-#   com.apple.aslmanager  - same; MachServices-only, so it never runs (#80).
-# Both become required here once #83 lands and their plists are un-mutated.
+# Required set = the daemons whose absence means userland did not come up.
+# syslogd is included: it has no RunAtLoad, but #77 restored KeepAlive=true,
+# which maps to j->ondemand = false (core.c:2450) so job_keepalive() runs it
+# continuously from load.
+#
+# Deliberately EXCLUDED:
+#   com.apple.aslmanager  - MachServices-only with no KeepAlive, so it is
+#                           genuinely unstartable until on-demand Mach launch
+#                           works (#79). It becomes required once #83 lands.
 LAUNCHD_REQUIRED="com.apple.configd com.apple.notifyd com.apple.hostnamed \
 com.apple.mDNSResponder com.apple.IPConfiguration com.apple.kextd \
-com.apple.DiskArbitration"
+com.apple.DiskArbitration com.apple.syslogd"
 
 if kill -0 "$list_pid" 2>/dev/null; then
     kill -9 "$list_pid" 2>/dev/null || true
