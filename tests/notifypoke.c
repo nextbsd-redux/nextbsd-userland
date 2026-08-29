@@ -6,13 +6,19 @@
  * useless: logger posts to SYSLOGD via /var/run/log and never touches
  * notifyd, so the test answered a question nobody asked.
  *
- * notify_post() is the whole job. notifyutil(1) exists in the tree but has no
- * Makefile and carries entitlement plumbing this does not need.
+ * <notify.h> is deliberately NOT included. It pulls <os/base.h>, which is not
+ * on the test-build include path, and this needs exactly one function whose
+ * signature is stable. Declaring it directly keeps the test binary free of
+ * the os/ header pack.
  *
  * usage: notifypoke <name>          exit 0 on success, 1 on failure
  */
-#include <notify.h>
+#include <stdint.h>
 #include <stdio.h>
+
+extern uint32_t notify_post(const char *name);
+
+#define NOTIFY_STATUS_OK 0
 
 int
 main(int argc, char **argv)
