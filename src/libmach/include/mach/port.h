@@ -95,4 +95,20 @@ typedef natural_t mach_port_msgcount_t;
 typedef natural_t mach_port_rights_t;
 #endif
 
+
+/*
+ * mach_port_qos_t — required by the generated mach_port MIG client
+ * (mach_port_allocate_qos / mach_port_allocate_full). Mirrors the kernel's
+ * sys/sys/mach/port.h:378 field-for-field.
+ */
+#ifndef _MACH_PORT_QOS_T_DEFINED_
+#define _MACH_PORT_QOS_T_DEFINED_
+typedef struct mach_port_qos {
+	unsigned int	name:1;		/* name given */
+	unsigned int	prealloc:1;	/* prealloced message */
+	boolean_t	pad1:30;
+	natural_t	len;
+} mach_port_qos_t;
+#endif /* _MACH_PORT_QOS_T_DEFINED_ */
+
 #endif /* !_MACH_PORT_H_ */

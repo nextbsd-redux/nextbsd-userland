@@ -74,4 +74,13 @@ typedef mach_port_t	mach_port_poly_t;
 typedef integer_t	ledger_item_t;
 typedef integer_t	ledger_amount_t;
 
+
+/*
+ * The generated mach_port MIG client includes only mach/ headers, but
+ * declares mach_port_space_info() / mach_port_space_basic_info(), whose types
+ * live in <mach_debug/ipc_info.h> as they do at Apple. Pull it in here so
+ * those declarations compile without the generated code needing to know.
+ */
+#include <mach_debug/ipc_info.h>
+
 #endif /* !_MACH_MACH_TYPES_H_ */

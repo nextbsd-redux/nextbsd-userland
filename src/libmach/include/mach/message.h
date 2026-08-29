@@ -381,7 +381,17 @@ typedef union {
 typedef unsigned int mach_msg_trailer_type_t;
 typedef unsigned int mach_msg_trailer_size_t;
 typedef unsigned int mach_port_seqno_t;
-typedef uint64_t     mach_port_context_t;
+#ifndef _MACH_PORT_CONTEXT_T_DEFINED_
+#define _MACH_PORT_CONTEXT_T_DEFINED_
+/*
+ * mach_port_context_t — uint64_t, matching Apple (mach_vm_address_t) and the
+ * MIG wire type. Three headers each defined this independently, two as
+ * uint64_t and one as uintptr_t, which is a redefinition error the moment any
+ * translation unit includes both. Nothing did until the generated mach_port
+ * MIG client pulled them together (#83). One definition, one guard.
+ */
+typedef uint64_t mach_port_context_t;
+#endif /* _MACH_PORT_CONTEXT_T_DEFINED_ */
 
 #define MACH_MSG_TRAILER_FORMAT_0	0
 
@@ -696,5 +706,15 @@ kern_return_t mach_port_construct(mach_port_name_t task,
 #ifdef __cplusplus
 }
 #endif
+
+
+/*
+ * mach_msg_trailer_info_t — required by the generated mach_port MIG client
+ * (mach_port_peek). Mirrors the kernel's sys/sys/mach/message.h:140.
+ */
+#ifndef _MACH_MSG_TRAILER_INFO_T_DEFINED_
+#define _MACH_MSG_TRAILER_INFO_T_DEFINED_
+typedef char *mach_msg_trailer_info_t;
+#endif /* _MACH_MSG_TRAILER_INFO_T_DEFINED_ */
 
 #endif /* !_MACH_MESSAGE_H_ */
