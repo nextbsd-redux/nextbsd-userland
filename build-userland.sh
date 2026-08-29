@@ -306,8 +306,12 @@ grep -qE '^mach_port_get_set_status\(' "$LIBMACH_MIG/mach_portUser.c" \
 echo "==> LIBMACH-MIG-OK: $(wc -l < "$LIBMACH_MIG/mach_portUser.c") lines of mach_port client"
 
 comp "libmach (libsystem_kernel) — installs mach/* headers into sysroot first"
+# bsd.lib.mk does NOT auto-create INCSDIR, hence the pre-creation here.
+# mach_debug/ joins the list for <mach_debug/ipc_info.h>, which the generated
+# mach_port MIG client needs (#83).
 mkdir -p "$DESTDIR/usr/lib/system" \
          "$DESTDIR/usr/include/mach" \
+         "$DESTDIR/usr/include/mach_debug" \
          "$DESTDIR/usr/libdata/pkgconfig"
 run_buildenv "make -C $SRC/libmach DESTDIR=$DESTDIR PREFIX=/usr MIGOUT=$LIBMACH_MIG all install"
 # Headers also need to be visible in the SYSROOT (not just DESTDIR) for the
@@ -318,6 +322,7 @@ run_buildenv "make -C $SRC/libmach DESTDIR=$DESTDIR PREFIX=/usr MIGOUT=$LIBMACH_
 if [ "$SYSROOT" != "$DESTDIR" ]; then
     mkdir -p "$SYSROOT/usr/include" "$SYSROOT/usr/lib/system" "$SYSROOT/usr/libdata/pkgconfig"
     cp -a "$DESTDIR/usr/include/mach"        "$SYSROOT/usr/include/" 2>/dev/null || true
+    cp -a "$DESTDIR/usr/include/mach_debug"  "$SYSROOT/usr/include/" 2>/dev/null || true
     cp -a "$DESTDIR/usr/lib/system/."        "$SYSROOT/usr/lib/system/" 2>/dev/null || true
     cp -a "$DESTDIR/usr/libdata/pkgconfig/." "$SYSROOT/usr/libdata/pkgconfig/" 2>/dev/null || true
 fi
