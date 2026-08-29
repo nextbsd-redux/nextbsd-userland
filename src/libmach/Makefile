@@ -21,14 +21,22 @@ SHLIB_MAJOR=	0
 SRCS=		mach_traps.c \
 		dispatch_kevent.c
 
-# MIGOUT — generated mach_port MIG client (mach_portUser.c), produced by
-# build-userland.sh from the kernel's mach_port.defs. Optional so a bare
-# `make -C src/libmach` still works for header installs and quick builds;
-# without it the _kernelrpc_mach_port_* stubs are absent and the entry points
-# in mach_traps.c fall back to their pre-MIG behaviour (see the MIG_CLIENT
-# guard there).
-.if defined(MIGOUT) && exists(${MIGOUT}/mach_portUser.c)
-SRCS+=		${MIGOUT}/mach_portUser.c
+# MIGOUT — directory holding the mig-generated mach_portUser.c, produced by
+# build-userland.sh from the kernel's mach_port.defs (nextbsd-kernel#125).
+#
+# Same shape configd and Libnotify use: .PATH plus a BARE filename. An
+# absolute path in SRCS is rejected outright by bsd.dep.mk ("$OBJS absolute
+# path not allowed"), which is why it goes through .PATH rather than being
+# spelled ${MIGOUT}/mach_portUser.c.
+#
+# Optional, so a bare `make -C src/libmach` still works for header installs
+# and quick builds; without it the _kernelrpc_mach_port_* stubs are absent and
+# the entry points in mach_traps.c keep their pre-MIG behaviour (see the
+# LIBMACH_HAVE_MIG_CLIENT guard there).
+MIGOUT?=
+.if !empty(MIGOUT)
+.PATH:		${MIGOUT}
+SRCS+=		mach_portUser.c
 CFLAGS+=	-I${MIGOUT} -DLIBMACH_HAVE_MIG_CLIENT=1
 .endif
 
