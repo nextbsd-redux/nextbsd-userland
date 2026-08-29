@@ -4,15 +4,33 @@
 <dict>
 	<key>Label</key>
 	<string>com.apple.syslogd</string>
-	<!-- iter 26: RunAtLoad DROPPED. When launchd spawns syslogd
-	     as its child and syslogd calls launch_msg(LAUNCH_KEY_CHECKIN),
-	     the Mach IPC call into launchd hangs (mach.ko interruptibility
-	     gap). When syslogd is run as a non-launchd child, launch_msg
-	     returns NULL and the FreeBSD port path proceeds cleanly.
-	     Until lazy MachServices spawn is properly wired, the test
-	     starts syslogd manually as a background process. -->
+	<!-- KeepAlive=true, matching Apple's shipped plist byte-for-byte.
+	     Do NOT set it false, and do not add RunAtLoad.
+
+	     Apple's syslogd has no RunAtLoad; it starts at load because
+	     KeepAlive=true maps to j->ondemand = false (core.c:2450) and
+	     job_keepalive() then returns "job configured to run
+	     continuously" (core.c:6397). Flipping this to false makes
+	     syslogd purely demand-launched -- and nothing on this image
+	     ever sends to com.apple.system.logger, so it would never start
+	     at all.
+
+	     A previous comment here claimed RunAtLoad had been "DROPPED"
+	     over a launch_msg(LAUNCH_KEY_CHECKIN) hang. RunAtLoad was never
+	     present in this plist, so nothing was dropped; the actual change
+	     was this boolean. The hang it described has no reproduction in
+	     the tree, and configd and mDNSResponder both check in to launchd
+	     as its children today without incident. syslogd also tolerates a
+	     failed check-in by design (syslogd.c:339-350) -- it keeps
+	     ingesting on /var/run/log and klog_in, losing only the ASL Mach
+	     service.
+
+	     The in-process plist scan used to force-start this job with
+	     job_dispatch(j, kickstart=true), which bypasses job_keepalive()
+	     entirely, so the flipped boolean was invisible until that scan
+	     was removed. -->
 	<key>KeepAlive</key>
-	<false/>
+	<true/>
 	<key>EnableTransactions</key>
 	<true/>
 	<key>EnablePressuredExit</key>

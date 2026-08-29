@@ -13,9 +13,19 @@
  * support yet) and /Network/Library (no NetInfo / OD).
  *
  * The enumeration state is just an int counter:
- *   0 -> /Local/Library, advance to 1
- *   1 -> /System/Library, advance to 2
- *   2 -> end (return 0)
+ *   1 -> /Local/Library,  advance to 2
+ *   2 -> /System/Library, advance to 3
+ *   3 -> end (return 0, WITHOUT writing a path)
+ *
+ * The terminating call must not write a path. Apple's callers test the
+ * return value before touching the buffer:
+ *
+ *     while ((es = NSGetNextSearchPathEnumeration(es, nspath))) { ... }
+ *
+ * so a call that fills 'path' and returns 0 has its path silently
+ * dropped -- the loop exits before the body runs. Returning 0 on the
+ * /System/Library step is what made `launchctl load -D all` search only
+ * /Local/Library and never see the OS daemons.
  *
  * If a future task adds per-user agents, extend the table at the
  * bottom of this header.
@@ -84,8 +94,10 @@ NSGetNextSearchPathEnumeration(NSSearchPathEnumerationState state,
                 return 2;
         case 2:
                 strlcpy(path, "/System/Library", MAXPATHLEN);
-                return 0;
+                return 3;
+        case 3:
         default:
+                /* Terminator: no path written. */
                 return 0;
         }
 }

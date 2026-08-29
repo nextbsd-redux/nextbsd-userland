@@ -349,9 +349,28 @@ main(int argc, char *const *argv)
 				    "(kernel.log_open=1; console quiet)");
 		}
 
-		launchd_scan_launchdaemons();
+		/*
+		 * No in-process LaunchDaemons scan.
+		 *
+		 * Apple's launchd does not scan; it creates one job,
+		 * com.apple.launchctl.System (jobmgr_init_session(), core.c),
+		 * and that job runs `launchctl bootstrap -S System`, which
+		 * does the whole boot sequence in a single process and in
+		 * order: empty /var/run and /tmp, fsck and remount /, then
+		 * `load -D all`. Because one program does the cleanup and the
+		 * loading sequentially, the wipe cannot overlap a running
+		 * daemon -- the race in #70 is structurally impossible.
+		 *
+		 * The scan was added by c5eebaf after a boot stall, on the
+		 * belief that no infrastructure existed to start the
+		 * LaunchDaemons. It existed; it was broken. The enumeration
+		 * shim dropped /System/Library (see the preceding commit), so
+		 * `load -D all` only ever searched /Local/Library and found
+		 * nothing. With that fixed, the bootstrapper brings the
+		 * system up on its own and the second loader is redundant.
+		 */
 		launchd_syslog(LOG_NOTICE | LOG_CONSOLE,
-		    "post-scan: entering launchd_runtime() event loop");
+		    "boot: LaunchDaemons loaded by com.apple.launchctl.System");
 	}
 
 	launchd_runtime_init2();
