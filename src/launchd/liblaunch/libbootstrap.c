@@ -28,6 +28,7 @@
 
 #include <mach/mach.h>
 #include <mach/vm_map.h>
+#include <string.h>	/* memset: see the au_tok/instance_id init below */
 #include <sys/types.h>
 #include <sys/syslog.h>
 #include <sys/stat.h>
@@ -259,15 +260,43 @@ bootstrap_look_up(mach_port_t bp, const name_t service_name, mach_port_t *sp)
 kern_return_t
 bootstrap_look_up2(mach_port_t bp, const name_t service_name, mach_port_t *sp, pid_t target_pid, uint64_t flags)
 {
+	/*
+	 * Zero this. It is sent to launchd as the instance id, so leaving it
+	 * uninitialised both leaks stack bytes into the request and makes the
+	 * request itself nondeterministic run to run.
+	 */
 	uuid_t instance_id;
+	memset(&instance_id, 0, sizeof(instance_id));
 	return bootstrap_look_up3(bp, service_name, sp, target_pid, instance_id, flags);
 }
 
 kern_return_t
 bootstrap_look_up3(mach_port_t bp, const name_t service_name, mach_port_t *sp, pid_t target_pid, const uuid_t instance_id, uint64_t flags)
 {
+	/*
+	 * au_tok is filled in by MIG from the reply's audit trailer
+	 * (UserAuditToken servercreds, job.defs:76). If anything in that chain
+	 * does not deliver the trailer, this stays whatever was on the stack --
+	 * and the BOOTSTRAP_PRIVILEGED_SERVER branch below then rejects the
+	 * lookup based on au_tok.val[1] being nonzero. That is a privilege
+	 * decision made on uninitialised memory.
+	 *
+	 * Observed: a plain bootstrap_look_up() of
+	 * com.apple.system.notification_center succeeds (kr=0, valid send
+	 * right), while notify_post() -- which is the same lookup plus
+	 * BOOTSTRAP_PRIVILEGED_SERVER -- fails, and it fails on arm64 while
+	 * amd64 passes in the SAME run. Same code, same commit, different
+	 * answer, which is what reading uninitialised stack looks like.
+	 *
+	 * Zeroing makes the decision deterministic. euid 0 means "root", which
+	 * is the truthful answer here: launchd is pid 1 running as root, so a
+	 * populated token would carry 0 anyway. If MIG does deliver the
+	 * trailer, this write is simply overwritten and nothing changes.
+	 */
 	audit_token_t au_tok;
 	bool privileged_server_lookup = flags & BOOTSTRAP_PRIVILEGED_SERVER;
+
+	memset(&au_tok, 0, sizeof(au_tok));
 	kern_return_t kr = 0;
 	mach_port_t puc;
 

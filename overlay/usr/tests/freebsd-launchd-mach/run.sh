@@ -1055,6 +1055,69 @@ else
     else
         echo "(notifyd not running)"
     fi
+
+    #
+    # LOST-WAKEUP TEST (#91). This is the measurement, not more logging.
+    #
+    # The two stacks above say: syslogd has SENT and is parked in
+    # ipc_mqueue_receive waiting for a reply, while notifyd sleeps in
+    # kqueue_scan -- idle, not deadlocked, simply never woken. That is
+    # consistent with the message sitting on notifyd's port with its
+    # EVFILT_MACHPORT knote never having fired.
+    #
+    # If that is what is happening, ANY second notification will wake notifyd,
+    # and it will then drain BOTH messages -- so syslogd unblocks and
+    # "wbl: after process_message" appears. A message that never reached the
+    # port cannot be rescued that way, so the two cases are distinguishable
+    # from userland, with no kernel instrumentation.
+    #
+    #   syslogd unblocks  -> queued-but-undelivered: LOST WAKEUP CONFIRMED,
+    #                        and the bug is in the delivery path
+    #                        (filt_machport / ipc_pset_signal / libdispatch's
+    #                        Mach source), not in syslogd or notifyd
+    #   still wedged      -> the message never arrived, or notifyd cannot
+    #                        process it at all; different search entirely
+    #
+    echo "--- lost-wakeup test: poking notifyd from a third process (#91) ---"
+    # notifypoke, NOT logger(1). The first version of this test fell back to
+    # logger, which posts to syslogd via /var/run/log and never reaches
+    # notifyd -- so it answered a question nobody asked and reported
+    # LOSTWAKEUP-NO on a poke that never happened.
+    # Capture the exit status. Piping straight into sed threw it away, which
+    # is how this test rendered SYSLOG-LOSTWAKEUP-NO three times for a poke
+    # that never actually happened (logger fallback, then a libnotify load
+    # failure, then notify_post returning NOTIFY_STATUS_FAILED). A verdict is
+    # only meaningful if the poke itself succeeded.
+    if [ -x /usr/tests/freebsd-launchd-mach/notifypoke ]; then
+        /usr/tests/freebsd-launchd-mach/notifypoke \
+            com.apple.system.lostwakeup.probe >/tmp/notifypoke.out 2>&1
+        _poke_rc=$?
+        sed 's/^/    /' /tmp/notifypoke.out
+    else
+        _poke_rc=127
+        echo "    SYSLOG-LOSTWAKEUP-SKIP: notifypoke not installed; cannot"
+        echo "    poke notifyd, so this run proves nothing either way"
+    fi
+    sleep 3
+    if [ "$_poke_rc" -ne 0 ]; then
+        echo "SYSLOG-LOSTWAKEUP-INVALID: the poke itself failed (rc=$_poke_rc)" \
+             "-- this run measures NOTHING about lost wakeups. The notifypoke" \
+             "output above says which stage failed (bootstrap lookup vs post)."
+        echo "--- notifyd at the time of the failed poke ---"
+        [ -n "$notifyd_pid" ] && procstat -kk "$notifyd_pid" 2>/dev/null | tail -n +2
+    elif grep -q 'wbl: after process_message' /var/log/syslogd.stderr 2>/dev/null; then
+        echo "SYSLOG-LOSTWAKEUP-CONFIRMED: syslogd unblocked after a second" \
+             "notification -- the first message was queued on notifyd's port" \
+             "and never delivered"
+    else
+        echo "SYSLOG-LOSTWAKEUP-NO: still wedged after the poke -- not a" \
+             "simple lost wakeup; the message may never have reached notifyd"
+        echo "--- notifyd after the poke ---"
+        [ -n "$notifyd_pid" ] && procstat -kk "$notifyd_pid" 2>/dev/null | tail -n +2
+    fi
+    echo "--- syslogd.stderr tail after the poke ---"
+    tail -6 /var/log/syslogd.stderr 2>/dev/null
+
     echo "=== end diagnostics ==="
     echo "SYSLOG-RUN-FAIL: marker not found in /var/log/system.log"
     exit 1
@@ -1362,8 +1425,80 @@ if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
            } else print
          }' "$IPCFG_PLIST" > /tmp/ipcfg-ci.plist &&
         mv /tmp/ipcfg-ci.plist "$IPCFG_PLIST"
-    launchctl unload "$IPCFG_PLIST" 2>/dev/null || true
-    launchctl load   "$IPCFG_PLIST" 2>/dev/null || true
+    # Bound these. run.sh has been stopping dead here: in every recent failing
+    # run the last console line is the injection message above, and neither the
+    # ARP block nor the ipconfigd.stderr dump below ever appears. launchctl
+    # load/unload is a Mach RPC into launchd, so a hang here strands the rest
+    # of the suite and IPCFG-ARP "fails" for want of output that was never
+    # produced.
+    #
+    # Background + kill budget rather than timeout(1), matching the launchctl
+    # list block above: if launchctl is stuck in an uninterruptible Mach
+    # receive, SIGTERM cannot reap it and $() would block forever.
+    for _act in unload load; do
+        launchctl "$_act" "$IPCFG_PLIST" >/dev/null 2>&1 &
+        _lc=$!
+        _i=0
+        while [ "$_i" -lt 20 ] && kill -0 "$_lc" 2>/dev/null; do
+            sleep 1; _i=$((_i + 1))
+        done
+        if kill -0 "$_lc" 2>/dev/null; then
+            kill -9 "$_lc" 2>/dev/null || true
+            echo "IPCFG-CI: launchctl $_act HUNG >20s (Mach RPC into launchd)" \
+                 "-- continuing; this is why the suite stalled here"
+            procstat -kk "$_lc" 2>/dev/null | tail -n +2
+        fi
+        echo "IPCFG-CI: launchctl $_act done"
+    done
+fi
+# Heartbeat. boot-test.sh runs `set timeout 480` against the CONSOLE, so any
+# stretch of >480s without output kills the VM and truncates the log mid-run --
+# exactly what happened on amd64, where the log ends at the injection message
+# above with the step still marked success (boot_soft masks it). The bounded
+# launchctl waits added here are silent, so announce progress or a wait is
+# indistinguishable from a hang.
+echo "IPCFG-CI: reload block complete, entering ARP gate"
+
+# Surface the RFC 5227 ARP-probe result to the CONSOLE as soon as it happens
+# (#87). ipconfigd's xlog() writes to stderr, which its plist redirects to
+# /var/log/ipconfigd.stderr, so IPCFG-ARP-OK never reaches the boot console
+# on its own -- it only appeared via the bulk `cat` of that file much later
+# in this script. boot-test.sh gates on the marker right after KEM-LINK and
+# timed out long before the dump, which is why IPCFG-ARP has been failing
+# with the daemon working perfectly. Same shape as the MDNS-ENGINE handling
+# below: wait briefly on the file, then echo the line so expect can see it.
+#
+# The pr < 0 branch of the probe is deliberately silent -- dhcp_discover.c
+# treats a failed arp_probe as no-conflict so a transient BPF error cannot
+# deadlock the lease -- so report that case explicitly rather than letting
+# the absence of a marker stall the suite.
+if [ ! -f /var/log/ipconfigd.stderr ]; then
+    # No stderr file at all. Previously this branch did not exist, so the
+    # whole block was skipped in SILENCE: "ipconfigd never wrote a log" and
+    # "the probe found nothing" both surfaced as a missing marker. Say which.
+    echo "IPCFG-ARP-SKIP: /var/log/ipconfigd.stderr absent"\
+         "(ipconfigd did not start, or its plist stderr redirect is not in"\
+         "effect) -- no result is possible"
+    ls -l /var/log/ipconfigd* 2>&1 | sed 's/^/    /' || true
+else
+    i=0
+    while [ $i -lt 30 ]; do
+        if grep -qE 'IPCFG-ARP-OK|IPCFG-BOUND-FAIL' \
+            /var/log/ipconfigd.stderr 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    if grep -q 'IPCFG-ARP-OK' /var/log/ipconfigd.stderr 2>/dev/null; then
+        grep -m1 'IPCFG-ARP-OK' /var/log/ipconfigd.stderr
+    elif grep -q 'IPCFG-BOUND-FAIL' /var/log/ipconfigd.stderr 2>/dev/null; then
+        grep -m1 'IPCFG-BOUND-FAIL' /var/log/ipconfigd.stderr
+    else
+        echo "IPCFG-ARP-SKIP: no probe result after ${i}s" \
+             "(arp_probe returned <0 and is treated as no-conflict, or DHCP" \
+             "had not reached the probe yet)"
+    fi
 fi
 
 # The NIC is arch-dependent: amd64 boots with `-nic user,model=e1000` (em0),
@@ -1380,7 +1515,15 @@ PRIMARY_IF=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exi
 [ -n "$PRIMARY_IF" ] || PRIMARY_IF=em0
 echo "==> primary interface: $PRIMARY_IF"
 
-if [ -f /var/log/ipconfigd.stderr ]; then
+if [ ! -f /var/log/ipconfigd.stderr ]; then
+    # No stderr file at all. Previously this branch did not exist, so the
+    # whole block was skipped in SILENCE: "ipconfigd never wrote a log" and
+    # "the probe found nothing" both surfaced as a missing marker. Say which.
+    echo "IPCFG-RENEW-SKIP: /var/log/ipconfigd.stderr absent"\
+         "(ipconfigd did not start, or its plist stderr redirect is not in"\
+         "effect) -- no result is possible"
+    ls -l /var/log/ipconfigd* 2>&1 | sed 's/^/    /' || true
+else
     i=0
     while [ $i -lt 30 ]; do
         if grep -q 'IPCFG-RENEW-OK\|IPCFG-STORE-FAIL\|IPCFG-BOUND-FAIL' \

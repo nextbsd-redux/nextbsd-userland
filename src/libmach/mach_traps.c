@@ -1160,9 +1160,35 @@ kern_return_t
 mach_port_destruct(mach_port_name_t task, mach_port_name_t name,
     mach_port_delta_t srdelta, mach_port_context_t guard)
 {
-	(void)srdelta;
+	kern_return_t kr;
+
+	/*
+	 * Guards are not tracked by the kernel yet, so we cannot enforce the
+	 * guard argument. That is a known gap (#84), not an accident: rather
+	 * than fail a call we cannot validate, we honour the part of the
+	 * contract we can.
+	 */
 	(void)guard;
-	return mach_port_deallocate(task, name);
+
+	/*
+	 * Apple's contract is two operations, not one: drop srdelta send
+	 * rights, THEN destroy the receive right. The previous version
+	 * discarded srdelta and called mach_port_deallocate(), which drops a
+	 * single reference of whatever right happened to be there -- so a
+	 * caller passing srdelta = -1 leaked a send right every time.
+	 */
+	if (srdelta != 0) {
+		kr = mach_port_mod_refs(task, name, MACH_PORT_RIGHT_SEND, srdelta);
+		/*
+		 * No send rights is legal here -- destruct is routinely called
+		 * on a port the caller only ever held receive on. Anything else
+		 * is a real failure and must not be papered over.
+		 */
+		if (kr != KERN_SUCCESS && kr != KERN_INVALID_RIGHT)
+			return kr;
+	}
+
+	return mach_port_mod_refs(task, name, MACH_PORT_RIGHT_RECEIVE, -1);
 }
 
 /*
