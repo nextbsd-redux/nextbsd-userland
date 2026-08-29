@@ -1142,6 +1142,17 @@ _notify_lib_init_locked(notify_globals_t globals, uint32_t event)
 
 		if (kstatus != KERN_SUCCESS)
 		{
+		    /*
+		     * kstatus is the raw kern_return_t from the MIG call and is
+		     * about to be replaced by a category, exactly as the category
+		     * is later flattened again by IS_INTERNAL_ERROR(). Report it
+		     * before it is lost -- "the RPC failed" is not actionable,
+		     * MACH_RCV_* vs MACH_SEND_* vs a MIG error is. __LINE__ tells
+		     * the checkin site apart from the common-port site.
+		     */
+		    _notify_report_stderr("_notify_lib_init: MIG call failed, "
+			"kstatus=0x%x server_port=0x%x line %d", kstatus,
+			globals->notify_server_port, __LINE__);
 		    if (kstatus == MACH_SEND_INVALID_DEST) {
 			status = NOTIFY_STATUS_SERVER_NOT_FOUND;
 		    } else {
@@ -1207,6 +1218,17 @@ _notify_lib_init_locked(notify_globals_t globals, uint32_t event)
 		kstatus = _notify_generate_common_port(globals->notify_server_port, &status, &mp);
 		if (kstatus != KERN_SUCCESS)
 		{
+		    /*
+		     * kstatus is the raw kern_return_t from the MIG call and is
+		     * about to be replaced by a category, exactly as the category
+		     * is later flattened again by IS_INTERNAL_ERROR(). Report it
+		     * before it is lost -- "the RPC failed" is not actionable,
+		     * MACH_RCV_* vs MACH_SEND_* vs a MIG error is. __LINE__ tells
+		     * the checkin site apart from the common-port site.
+		     */
+		    _notify_report_stderr("_notify_lib_init: MIG call failed, "
+			"kstatus=0x%x server_port=0x%x line %d", kstatus,
+			globals->notify_server_port, __LINE__);
 		    if (kstatus == MACH_SEND_INVALID_DEST) {
 			status = NOTIFY_STATUS_SERVER_NOT_FOUND;
 		    } else {
