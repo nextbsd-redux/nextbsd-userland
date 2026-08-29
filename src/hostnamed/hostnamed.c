@@ -55,6 +55,9 @@ extern void	load_hostname(dispatch_queue_t S_queue);
 /* prefs_monitor entry — extern from src/hostnamed/prefs_monitor.c. */
 extern int	prefs_monitor_start(dispatch_queue_t queue);
 
+/* prefs_monitor boot-time SCPrefs reader — extern from prefs_monitor.c. */
+extern CFStringRef	prefs_monitor_copy_configured_name(void);
+
 /* hostname_observer entry — extern from src/hostnamed/hostname_observer.c.
  * Watches State:/Network/HostNames for mDNSResponder's Bonjour
  * conflict-rename feedback and persists the resolved name to SCPrefs (#156). */
@@ -110,23 +113,39 @@ main(int argc, char **argv)
 	 * stays at FreeBSD's default "localhost" until the engine
 	 * settles. The synthesized value is also what
 	 * freebsd_synthesize_hostname returns as the engine's
-	 * "localhost" carry fallback. */
+	 * "localhost" carry fallback.
+	 *
+	 * Prefer the CONFIGURED name (SCPrefs ComputerName) when there is
+	 * one, falling back to synthesis only when there is not. This is the
+	 * same precedence the decision engine uses, and it matters here:
+	 * setting the synthesised name first meant a configured machine
+	 * announced the wrong name until the engine's first pass corrected
+	 * it seconds later -- in the getty banner, in early syslog records,
+	 * and to anything else sampling the hostname during boot (#66). */
 	{
-		CFStringRef synth = freebsd_synthesize_hostname();
+		CFStringRef configured = prefs_monitor_copy_configured_name();
+		CFStringRef synth = (configured == NULL) ?
+		    freebsd_synthesize_hostname() : NULL;
+		CFStringRef boot_name = (configured != NULL) ? configured :
+		    synth;
+		const char *src = (configured != NULL) ? "SCPrefs" :
+		    "synthesized";
 		char buf[256];
 
-		if (synth != NULL && CFStringGetCString(synth, buf,
+		if (boot_name != NULL && CFStringGetCString(boot_name, buf,
 		    sizeof(buf), kCFStringEncodingUTF8)) {
 			char readback[256] = "";
 			if (sethostname(buf, (int)strlen(buf)) == 0) {
 				(void)gethostname(readback, sizeof(readback));
-				xlog("boot-time sethostname('%s') OK; "
-				    "gethostname readback='%s'", buf, readback);
+				xlog("boot-time sethostname('%s') OK (%s); "
+				    "gethostname readback='%s'", buf, src,
+				    readback);
 			} else {
-				xlog("boot-time sethostname('%s') FAILED: "
-				    "errno=%d", buf, errno);
+				xlog("boot-time sethostname('%s') FAILED (%s): "
+				    "errno=%d", buf, src, errno);
 			}
 		}
+		if (configured != NULL) CFRelease(configured);
 		if (synth != NULL) CFRelease(synth);
 	}
 
