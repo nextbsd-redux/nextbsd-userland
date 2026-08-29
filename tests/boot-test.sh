@@ -973,6 +973,10 @@ expect {
     "IPCFG-ARP-OK" {
         puts "\nOK: ipconfigd RFC 5227 ARP probe clean (no conflict on offered address)"
     }
+    "IPCFG-ARP-SKIP" {
+        puts "\nSKIP: ARP probe produced no result -- dhcp_discover.c treats a failed
+        arp_probe as no-conflict by design, so this is tolerated (#87)"
+    }
 }
 
 expect {

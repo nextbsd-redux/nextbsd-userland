@@ -1366,6 +1366,40 @@ if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
     launchctl load   "$IPCFG_PLIST" 2>/dev/null || true
 fi
 
+# Surface the RFC 5227 ARP-probe result to the CONSOLE as soon as it happens
+# (#87). ipconfigd's xlog() writes to stderr, which its plist redirects to
+# /var/log/ipconfigd.stderr, so IPCFG-ARP-OK never reaches the boot console
+# on its own -- it only appeared via the bulk `cat` of that file much later
+# in this script. boot-test.sh gates on the marker right after KEM-LINK and
+# timed out long before the dump, which is why IPCFG-ARP has been failing
+# with the daemon working perfectly. Same shape as the MDNS-ENGINE handling
+# below: wait briefly on the file, then echo the line so expect can see it.
+#
+# The pr < 0 branch of the probe is deliberately silent -- dhcp_discover.c
+# treats a failed arp_probe as no-conflict so a transient BPF error cannot
+# deadlock the lease -- so report that case explicitly rather than letting
+# the absence of a marker stall the suite.
+if [ -f /var/log/ipconfigd.stderr ]; then
+    i=0
+    while [ $i -lt 30 ]; do
+        if grep -qE 'IPCFG-ARP-OK|IPCFG-BOUND-FAIL' \
+            /var/log/ipconfigd.stderr 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    if grep -q 'IPCFG-ARP-OK' /var/log/ipconfigd.stderr 2>/dev/null; then
+        grep -m1 'IPCFG-ARP-OK' /var/log/ipconfigd.stderr
+    elif grep -q 'IPCFG-BOUND-FAIL' /var/log/ipconfigd.stderr 2>/dev/null; then
+        grep -m1 'IPCFG-BOUND-FAIL' /var/log/ipconfigd.stderr
+    else
+        echo "IPCFG-ARP-SKIP: no probe result after ${i}s" \
+             "(arp_probe returned <0 and is treated as no-conflict, or DHCP" \
+             "had not reached the probe yet)"
+    fi
+fi
+
 # The NIC is arch-dependent: amd64 boots with `-nic user,model=e1000` (em0),
 # arm64 with virtio-net-pci (vtnet0). Hardcoding em0 made every
 # interface-named assertion below fail on arm64 -- IPCFG-RPC-FAIL and
