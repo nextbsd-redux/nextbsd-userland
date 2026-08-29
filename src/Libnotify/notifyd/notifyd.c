@@ -1459,6 +1459,8 @@ main(int argc, const char *argv[])
 			MACH_PORT_NULL, NULL);
 	dispatch_mach_connect(global.mach_channel, global.server_port,
 			MACH_PORT_NULL, NULL);
+	fprintf(stderr, "notifyd[%d]: CP11 channels connected, now serving "
+	    "server_port=0x%x\n", getpid(), global.server_port); fflush(stderr);
 
 	xpc_event_publisher_t publisher = xpc_event_publisher_create("com.apple.notifyd.matching", global.workloop);
 	global.notify_state.event_publisher = publisher;
