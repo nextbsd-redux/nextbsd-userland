@@ -1040,6 +1040,21 @@ else
     cat /var/log/syslogd.stderr 2>/dev/null || echo "(no syslogd.stderr)"
     echo "--- syslogd kernel stacks (procstat -kk) ---"
     procstat -kk "$(pgrep -x syslogd)" 2>/dev/null || echo "(procstat unavailable)"
+    # notifyd too (#91). syslogd wedges in ipc_mqueue_receive, i.e. it SENT
+    # and is waiting for a reply -- so the interesting process is the one that
+    # never replied. notifyd reaches CP13/dispatch_main and stays alive, which
+    # says the message lands on its port and its dispatch source never fires.
+    # Without notifyd's stack we cannot tell whether it is parked in kevent
+    # (delivery bug) or blocked somewhere else.
+    echo "--- notifyd kernel stacks (procstat -kk) ---"
+    notifyd_pid=$(pgrep -x notifyd | head -1)
+    if [ -n "$notifyd_pid" ]; then
+        procstat -kk "$notifyd_pid" 2>/dev/null || echo "(procstat unavailable)"
+        echo "--- notifyd threads ---"
+        procstat -t "$notifyd_pid" 2>/dev/null || true
+    else
+        echo "(notifyd not running)"
+    fi
     echo "=== end diagnostics ==="
     echo "SYSLOG-RUN-FAIL: marker not found in /var/log/system.log"
     exit 1
