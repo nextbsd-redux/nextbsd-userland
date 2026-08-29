@@ -91,6 +91,9 @@ INCS=		include/mach/mach.h \
 		include/mach/std_types.defs \
 		include/mach/mach_types.defs \
 		include/mach/machine_types.defs
+INCSGROUPS=	INCS MACHDEBUGINCS
+MACHDEBUGINCS=	include/mach_debug/ipc_info.h
+MACHDEBUGINCSDIR=	${PREFIX}/include/mach_debug
 INCSDIR=	${PREFIX}/include/mach
 LIBDIR=		${PREFIX}/lib/system
 

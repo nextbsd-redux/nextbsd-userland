@@ -98,7 +98,17 @@ kern_return_t thread_destruct_special_reply_port(mach_port_name_t reply_port,
  * single-process port universe we have today.
  */
 typedef int32_t mach_port_delta_t;
+#ifndef _MACH_PORT_CONTEXT_T_DEFINED_
+#define _MACH_PORT_CONTEXT_T_DEFINED_
+/*
+ * mach_port_context_t — uint64_t, matching Apple (mach_vm_address_t) and the
+ * MIG wire type. Three headers each defined this independently, two as
+ * uint64_t and one as uintptr_t, which is a redefinition error the moment any
+ * translation unit includes both. Nothing did until the generated mach_port
+ * MIG client pulled them together (#83). One definition, one guard.
+ */
 typedef uint64_t mach_port_context_t;
+#endif /* _MACH_PORT_CONTEXT_T_DEFINED_ */
 
 kern_return_t mach_port_destruct(mach_port_name_t task,
     mach_port_name_t name, mach_port_delta_t srdelta,
