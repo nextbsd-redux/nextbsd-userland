@@ -448,8 +448,27 @@ mach_port_set_attributes(mach_port_name_t task, mach_port_name_t name,
     mach_port_flavor_t flavor, mach_port_info_t info,
     mach_msg_type_number_t infoCnt)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	/*
+	 * Not cosmetic. Five callers depended on this and all five were
+	 * silently ignored:
+	 *
+	 *   notifyd.c:935   MACH_PORT_LIMITS_INFO, qlimit = 32 on the
+	 *                   system-wide notification port -- so it has been
+	 *                   running with MACH_PORT_QLIMIT_DEFAULT (5), which
+	 *                   the probe in nextbsd-kernel#125 measured directly
+	 *   core.c:1709     MACH_PORT_LIMITS_INFO on exit_status_port
+	 *   core.c:1992/6828/7692
+	 *                   MACH_PORT_TEMPOWNER on service ports, which
+	 *                   governs port ownership when a job dies -- the
+	 *                   machinery on-demand launch runs on
+	 */
+	return _kernelrpc_mach_port_set_attributes(task, name, flavor, info,
+	    infoCnt);
+#else
 	(void)task; (void)name; (void)flavor; (void)info; (void)infoCnt;
 	return KERN_SUCCESS;
+#endif
 }
 
 kern_return_t
@@ -576,12 +595,17 @@ mach_port_extract_right(mach_port_name_t task, mach_port_name_t name,
     mach_msg_type_name_t desired, mach_port_t *port,
     mach_msg_type_name_t *acquired)
 {
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return _kernelrpc_mach_port_extract_right(task, name, desired, port,
+	    acquired);
+#else
 	(void)task; (void)name; (void)desired;
 	if (port != NULL)
 		*port = 0;
 	if (acquired != NULL)
 		*acquired = 0;
 	return KERN_RESOURCE_SHORTAGE;
+#endif
 }
 
 kern_return_t
