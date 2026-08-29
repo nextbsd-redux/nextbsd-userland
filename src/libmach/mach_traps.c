@@ -835,8 +835,12 @@ mach_ool_unmap(vm_address_t addr, vm_size_t size)
 	if ((uintptr_t)addr % (uintptr_t)pagesize != 0)
 		return KERN_SUCCESS;	/* interior pointer; not ours to unmap */
 
+	/* KERN_FAILURE, not KERN_INVALID_ADDRESS: libmach's kern_return.h
+	 * defines only SUCCESS/FAILURE/ABORTED/NOT_SUPPORTED/TIMED_OUT, and
+	 * this is the code mach_vm_deallocate already returned for a failed
+	 * munmap. */
 	if (munmap((void *)(uintptr_t)addr, (size_t)size) != 0)
-		return KERN_INVALID_ADDRESS;
+		return KERN_FAILURE;
 	return KERN_SUCCESS;
 }
 
