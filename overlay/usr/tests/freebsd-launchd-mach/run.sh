@@ -1117,6 +1117,18 @@ else
     fi
     echo "--- syslogd.stderr tail after the poke ---"
     tail -6 /var/log/syslogd.stderr 2>/dev/null
+    # process_message() writes its own trace to /tmp/process_msg.log, and
+    # nothing has ever dumped it -- so we have been blind exactly between
+    # "wbl: before process_message" (the last stderr line) and wherever it
+    # actually stalls. syslogd sits in ipc_mqueue_receive waiting on a reply,
+    # and the candidates inside that function are distinguishable only here:
+    # notify_register_plain (SOURCE_KERN only) vs asl_out_message.
+    echo "--- /tmp/process_msg.log (process_message internal trace) ---"
+    if [ -f /tmp/process_msg.log ]; then
+        tail -20 /tmp/process_msg.log 2>/dev/null | sed 's/^/    /'
+    else
+        echo "    (absent -- process_message never reached its first trace point)"
+    fi
 
     echo "=== end diagnostics ==="
     echo "SYSLOG-RUN-FAIL: marker not found in /var/log/system.log"
