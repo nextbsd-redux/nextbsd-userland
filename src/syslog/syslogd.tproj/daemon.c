@@ -292,15 +292,42 @@ whatsmyhostname()
 
 	if (global.hostname != NULL) return global.hostname;
 
+	/*
+	 * #91 second bug. syslogd blocks in ipc_mqueue_receive inside
+	 * write_boot_log() -> process_message() -> aslmsg_verify(), and the
+	 * only Mach RPCs in that path are the two notify calls below. Both
+	 * are synchronous MIG routines that wait for a reply from notifyd,
+	 * and notify_register_check sits inside a dispatch_once -- so if it
+	 * blocks it blocks FOREVER and takes every later caller with it.
+	 *
+	 * Trace both so the next boot names which one, instead of inferring
+	 * it. Note notifyd does answer other clients in the same boot
+	 * (notifypoke's checkin succeeds), so this is one unanswered request
+	 * rather than a dead server -- most likely an ordering problem, this
+	 * running before notifyd's dispatch channel is serving.
+	 */
+	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	  if (_h) { fprintf(_h, "[%d] wmh: enter (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
+
 	dispatch_once(&once, ^{
+		FILE *_o = fopen("/tmp/process_msg.log", "a");
+		if (_o) { fprintf(_o, "[%d] wmh: before notify_register_check\n", getpid()); fclose(_o); }
 		snprintf(myname, sizeof(myname), "%s", "localhost");
 		notify_register_check(kNotifySCHostNameChange, &name_change_token);
+		_o = fopen("/tmp/process_msg.log", "a");
+		if (_o) { fprintf(_o, "[%d] wmh: after notify_register_check token=%d\n", getpid(), name_change_token); fclose(_o); }
 	});
 
 	check = 1;
 	status = 0;
 
+	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	  if (_h) { fprintf(_h, "[%d] wmh: before notify_check (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
+
 	if (name_change_token >= 0) status = notify_check(name_change_token, &check);
+
+	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	  if (_h) { fprintf(_h, "[%d] wmh: after notify_check status=%d check=%d\n", getpid(), status, check); fclose(_h); } }
 
 	if ((status == 0) && (check == 0)) return (const char *)myname;
 
