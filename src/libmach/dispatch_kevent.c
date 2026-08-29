@@ -75,6 +75,21 @@
 #ifndef MACH_RCV_LARGE
 #define MACH_RCV_LARGE 0x00000004
 #endif
+#ifndef MACH_RCV_TRAILER_CTX
+#define MACH_RCV_TRAILER_CTX 4
+#endif
+#ifndef MACH_RCV_TRAILER_ELEMENTS
+#define MACH_RCV_TRAILER_ELEMENTS(x) (((x) & 0xf) << 24)
+#endif
+#ifndef MACH_RCV_TRAILER_TYPE
+#define MACH_RCV_TRAILER_TYPE(x) (((x) & 0xf) << 28)
+#endif
+#ifndef MACH_MSG_TRAILER_FORMAT_0
+#define MACH_MSG_TRAILER_FORMAT_0 0
+#endif
+#ifndef MAX_TRAILER_SIZE
+#define MAX_TRAILER_SIZE ((mach_msg_size_t)sizeof(mach_msg_max_trailer_t))
+#endif
 #ifndef MACH_RCV_MSG
 #define MACH_RCV_MSG 0x00000002
 #endif
@@ -394,19 +409,63 @@ backlog_recv_one_locked(struct mach_kev_reg *r)
 	if (hdr == NULL)
 		return (-1);
 
-	kr = mach_msg(hdr, MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_TIMEOUT,
-	    0, bufsize, r->wrap_pset, 0, MACH_PORT_NULL);
+	/*
+	 * The trailer elements are load-bearing, not decoration.
+	 *
+	 * Without MACH_RCV_TRAILER_ELEMENTS the kernel never runs
+	 *
+	 *	trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option)
+	 *
+	 * (mach_msg.c, guarded by `option & MACH_RCV_TRAILER_MASK`), so the
+	 * trailer stays at MACH_MSG_TRAILER_MINIMUM_SIZE -- 8 bytes, type and
+	 * size only. Any MIG routine declaring ServerAuditToken then fails in
+	 * its generated server stub on
+	 *
+	 *	trailer_size < sizeof(audit_token_t)		 (8 < 32)
+	 *
+	 * and returns MIG_TRAILER_ERROR (-309) to the client.
+	 *
+	 * That is #91. notify_ipc.defs declares ServerAuditToken on the checkin
+	 * routines, so notifyd rejected every checkin; libnotify reported it as
+	 * NOTIFY_STATUS_SERVER_CHECKIN_FAILED, flattened again to
+	 * NOTIFY_STATUS_FAILED, and syslogd sat in ipc_mqueue_receive after an
+	 * RPC that had genuinely failed. It was never a lost wakeup.
+	 *
+	 * Kernel diagnostic that pinned it (nextbsd-kernel#135):
+	 *
+	 *	MIGTRAILER: id=1023 size=32 opt=0x106 type=0 tsize=8 moved=0
+	 *
+	 * opt=0x106 is exactly RCV_MSG|RCV_LARGE|RCV_TIMEOUT with nothing in
+	 * the trailer field, and tsize=8 is the resulting minimum trailer.
+	 *
+	 * CTX rather than AUDIT to match Apple's dispatch_mig_server()
+	 * (libdispatch mach.c:2959), which asks for the same set. The trailer
+	 * structs are cumulative, so mach_msg_context_trailer_t already
+	 * contains msgh_audit.
+	 */
+	static const mach_msg_options_t rcv_opts =
+	    MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_TIMEOUT |
+	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
+	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0);
+
+	kr = mach_msg(hdr, rcv_opts, 0, bufsize, r->wrap_pset, 0,
+	    MACH_PORT_NULL);
 
 	if (kr == MACH_RCV_TOO_LARGE) {
-		mach_msg_size_t need = hdr->msgh_size;
+		/*
+		 * msgh_size is the MESSAGE size and excludes the trailer, so
+		 * allocate headroom for it -- now that we ask for a bigger
+		 * trailer, retrying with exactly msgh_size can land back on
+		 * MACH_RCV_TOO_LARGE forever.
+		 */
+		mach_msg_size_t need = hdr->msgh_size + MAX_TRAILER_SIZE;
 		free(hdr);
 		hdr = malloc(need);
 		if (hdr == NULL)
 			return (-1);
 		bufsize = need;
-		kr = mach_msg(hdr,
-		    MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_TIMEOUT,
-		    0, bufsize, r->wrap_pset, 0, MACH_PORT_NULL);
+		kr = mach_msg(hdr, rcv_opts, 0, bufsize, r->wrap_pset, 0,
+		    MACH_PORT_NULL);
 	}
 
 	if (kr == MACH_RCV_TIMED_OUT) {
