@@ -836,22 +836,70 @@ while [ "$i" -lt 30 ] && kill -0 "$list_pid" 2>/dev/null; do
     sleep 1
     i=$((i + 1))
 done
+#
+# #81: this check used to pass on `grep -q "^PID"`, which matches the HEADER
+# LINE that launchctl list always prints -- so a boot with an entirely empty
+# job table reported success. That is exactly how on-demand Mach launch (#79)
+# and ASL rotation (#80) stayed broken under a green CI for months. Assert the
+# jobs are actually there, and make the failure fatal.
+#
+# Required set = the daemons whose absence means userland did not come up.
+# syslogd is included: it has no RunAtLoad, but #77 restored KeepAlive=true,
+# which maps to j->ondemand = false (core.c:2450) so job_keepalive() runs it
+# continuously from load.
+#
+# Deliberately EXCLUDED:
+#   com.apple.aslmanager  - MachServices-only with no KeepAlive, so it is
+#                           genuinely unstartable until on-demand Mach launch
+#                           works (#79). It becomes required once #83 lands.
+LAUNCHD_REQUIRED="com.apple.configd com.apple.notifyd com.apple.hostnamed \
+com.apple.mDNSResponder com.apple.IPConfiguration com.apple.kextd \
+com.apple.DiskArbitration com.apple.syslogd"
+
 if kill -0 "$list_pid" 2>/dev/null; then
     kill -9 "$list_pid" 2>/dev/null || true
     echo "=== /tmp/launchctl_list.out (partial) ==="
     head -20 "$launchctl_out" 2>/dev/null || true
     echo "=== end ==="
     echo "LAUNCHCTL-LIST-FAIL: still running after 30s (likely D-state Mach recv)"
+    exit 1
 else
     if wait "$list_pid" 2>/dev/null; then list_rc=0; else list_rc=$?; fi
     head -20 "$launchctl_out"
-    if [ "$list_rc" -eq 0 ] && grep -q "^PID" "$launchctl_out"; then
-        echo "LAUNCHCTL-LIST-OK: exit=0, $(wc -l < "$launchctl_out") line(s) of output"
-    elif [ "$list_rc" -eq 139 ]; then
+    if [ "$list_rc" -eq 139 ]; then
         echo "LAUNCHCTL-LIST-FAIL: segfault (signal 11) — print_jobs NULL deref?"
-    else
+        exit 1
+    elif [ "$list_rc" -ne 0 ]; then
         echo "LAUNCHCTL-LIST-FAIL: exit=$list_rc"
+        exit 1
     fi
+
+    # Count real job rows, i.e. everything that is not the "PID Status Label"
+    # header and not blank. A header-only table is zero jobs.
+    launchd_jobs=$(awk 'NR > 1 && NF > 0 { n++ } END { print n + 0 }' "$launchctl_out")
+    if [ "$launchd_jobs" -eq 0 ]; then
+        echo "=== /tmp/launchctl_list.out (full) ==="
+        cat "$launchctl_out" 2>/dev/null || true
+        echo "=== end ==="
+        echo "LAUNCHCTL-LIST-FAIL: launchctl list returned 0 jobs — userland did not come up"
+        exit 1
+    fi
+
+    launchd_missing=""
+    for _lbl in $LAUNCHD_REQUIRED; do
+        if ! awk -v want="$_lbl" '$3 == want { found = 1 } END { exit !found }' "$launchctl_out"; then
+            launchd_missing="$launchd_missing $_lbl"
+        fi
+    done
+    if [ -n "$launchd_missing" ]; then
+        echo "=== /tmp/launchctl_list.out (full) ==="
+        cat "$launchctl_out" 2>/dev/null || true
+        echo "=== end ==="
+        echo "LAUNCHCTL-LIST-FAIL: $launchd_jobs job(s) loaded but these RunAtLoad daemons are missing:$launchd_missing"
+        exit 1
+    fi
+
+    echo "LAUNCHCTL-LIST-OK: exit=0, $launchd_jobs job(s) loaded, all required daemons present"
 fi
 
 # GETTY-TTYV0 — the framebuffer login (org.nextbsd.getty.ttyv0).
