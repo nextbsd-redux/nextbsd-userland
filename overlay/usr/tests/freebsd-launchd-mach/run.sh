@@ -1079,11 +1079,16 @@ else
     #                        process it at all; different search entirely
     #
     echo "--- lost-wakeup test: poking notifyd from a third process (#91) ---"
-    if [ -x /usr/bin/notifyutil ] || command -v notifyutil >/dev/null 2>&1; then
-        notifyutil -p com.apple.system.lostwakeup.probe 2>&1 | sed 's/^/    /'
+    # notifypoke, NOT logger(1). The first version of this test fell back to
+    # logger, which posts to syslogd via /var/run/log and never reaches
+    # notifyd -- so it answered a question nobody asked and reported
+    # LOSTWAKEUP-NO on a poke that never happened.
+    if [ -x /usr/tests/freebsd-launchd-mach/notifypoke ]; then
+        /usr/tests/freebsd-launchd-mach/notifypoke \
+            com.apple.system.lostwakeup.probe 2>&1 | sed 's/^/    /'
     else
-        echo "    (notifyutil absent; posting via logger instead)"
-        logger -t lostwakeup "poke $$" 2>/dev/null || true
+        echo "    SYSLOG-LOSTWAKEUP-SKIP: notifypoke not installed; cannot"
+        echo "    poke notifyd, so this run proves nothing either way"
     fi
     sleep 3
     if grep -q 'wbl: after process_message' /var/log/syslogd.stderr 2>/dev/null; then
@@ -1406,8 +1411,30 @@ if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
            } else print
          }' "$IPCFG_PLIST" > /tmp/ipcfg-ci.plist &&
         mv /tmp/ipcfg-ci.plist "$IPCFG_PLIST"
-    launchctl unload "$IPCFG_PLIST" 2>/dev/null || true
-    launchctl load   "$IPCFG_PLIST" 2>/dev/null || true
+    # Bound these. run.sh has been stopping dead here: in every recent failing
+    # run the last console line is the injection message above, and neither the
+    # ARP block nor the ipconfigd.stderr dump below ever appears. launchctl
+    # load/unload is a Mach RPC into launchd, so a hang here strands the rest
+    # of the suite and IPCFG-ARP "fails" for want of output that was never
+    # produced.
+    #
+    # Background + kill budget rather than timeout(1), matching the launchctl
+    # list block above: if launchctl is stuck in an uninterruptible Mach
+    # receive, SIGTERM cannot reap it and $() would block forever.
+    for _act in unload load; do
+        launchctl "$_act" "$IPCFG_PLIST" >/dev/null 2>&1 &
+        _lc=$!
+        _i=0
+        while [ "$_i" -lt 20 ] && kill -0 "$_lc" 2>/dev/null; do
+            sleep 1; _i=$((_i + 1))
+        done
+        if kill -0 "$_lc" 2>/dev/null; then
+            kill -9 "$_lc" 2>/dev/null || true
+            echo "IPCFG-CI: launchctl $_act HUNG >20s (Mach RPC into launchd)" \
+                 "-- continuing; this is why the suite stalled here"
+            procstat -kk "$_lc" 2>/dev/null | tail -n +2
+        fi
+    done
 fi
 
 # Surface the RFC 5227 ARP-probe result to the CONSOLE as soon as it happens
