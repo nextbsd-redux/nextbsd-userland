@@ -472,12 +472,32 @@ kern_return_t
 mach_port_mod_refs(mach_port_name_t task, mach_port_name_t name,
     mach_port_right_t right, mach_port_delta_t delta)
 {
-#ifdef LIBMACH_HAVE_MIG_CLIENT
-	return _kernelrpc_mach_port_mod_refs(task, name, right, delta);
-#else
+	/*
+	 * DELIBERATELY still a no-op, and split from the other six (#83).
+	 *
+	 * Wiring this to the MIG client panics the kernel. CI reproduced it
+	 * on both arches: test_evfilt_machport_concurrent.c:146 calls
+	 * mach_port_mod_refs() on a PORT SET while kevents are being attached
+	 * and detached concurrently. With this a no-op the set was never
+	 * destroyed, so the race was invisible; made real, the set does get
+	 * destroyed and EVFILT_MACHPORT then dereferences it:
+	 *
+	 *   Fatal trap 12: page fault while in kernel mode
+	 *   fault virtual address = 0x488
+	 *   current process       = 42 (test_evfilt_machpor)
+	 *   ... sys_mach_msg_trap+0x30
+	 *
+	 * That is a kernel defect, not a reason to keep lying here --
+	 * userland must not be able to panic the kernel. Tracked as
+	 * nextbsd-kernel#131; this becomes a real RPC once that is fixed.
+	 *
+	 * The plan (nextbsd-kernel#125) called this exact risk in advance:
+	 * "making mach_port_mod_refs real is a behavioural change, not a bug
+	 * fix ... land it in its own commit, separable from the rest."
+	 * Converting all seven at once ignored that; this restores the split.
+	 */
 	(void)task; (void)name; (void)right; (void)delta;
 	return KERN_SUCCESS;
-#endif
 }
 
 /*
