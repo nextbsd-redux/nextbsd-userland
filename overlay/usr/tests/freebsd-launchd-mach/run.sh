@@ -1127,7 +1127,7 @@ else
     # separates "message lost before notifyd checked in" from "notifyd
     # answered and syslogd missed the reply".
     echo "--- notifyd: serving marker + observed checkins ---"
-    grep -E "CP11|CHECKIN from pid" /var/log/notifyd.stderr 2>/dev/null \
+    grep -E "CP11|CHECKIN from pid|COMMONPORT-(ENTER|RETURN)" /var/log/notifyd.stderr 2>/dev/null \
         | tail -12 | sed 's/^/    /' \
         || echo "    (no notifyd.stderr markers)"
 

@@ -1827,6 +1827,26 @@ kern_return_t __notify_generate_common_port
 	pid_t pid = audit_token_to_pid(audit);
 
 	log_message(ASL_LEVEL_DEBUG, "__notify_generate_common_port %d\n", pid);
+	/*
+	 * #91, second failure mode. syslogd hangs in _notify_lib_init, and
+	 * register_plain_2 is a MIG simpleroutine (no reply), so it cannot be
+	 * the blocking call -- only _notify_server_checkin and this routine
+	 * carry replies. notifyd logs two checkins from the hung pid, so those
+	 * completed and this is the next RPC in line.
+	 *
+	 * This reply is COMPLEX: it carries a send right out (*out_port), which
+	 * is a different delivery path from a simple reply. Bracket the handler
+	 * so the next boot distinguishes:
+	 *
+	 *	no ENTER          the request never arrived
+	 *	ENTER, no RETURN  notifyd is stuck inside the handler
+	 *	ENTER and RETURN  notifyd replied and the reply was lost
+	 *
+	 * stderr, not log_message: log_message writes to global.log_path and
+	 * returns early when that is NULL, so it is silent by default here.
+	 */
+	fprintf(stderr, "notifyd[%d]: COMMONPORT-ENTER pid=%d\n", getpid(), pid);
+	fflush(stderr);
 
 	// Create a proc object if one doesn't exist
 	notify_state_t *ns = &global.notify_state;
@@ -1859,6 +1879,9 @@ kern_return_t __notify_generate_common_port
 	pdata->common_port_data = common_port_create(&global.notify_state, port);
 	*out_port = port;
 
+	fprintf(stderr, "notifyd[%d]: COMMONPORT-RETURN pid=%d port=0x%x\n",
+	    getpid(), pid, port);
+	fflush(stderr);
 	return KERN_SUCCESS;
 }
 
