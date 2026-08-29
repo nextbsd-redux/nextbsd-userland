@@ -1055,6 +1055,50 @@ else
     else
         echo "(notifyd not running)"
     fi
+
+    #
+    # LOST-WAKEUP TEST (#91). This is the measurement, not more logging.
+    #
+    # The two stacks above say: syslogd has SENT and is parked in
+    # ipc_mqueue_receive waiting for a reply, while notifyd sleeps in
+    # kqueue_scan -- idle, not deadlocked, simply never woken. That is
+    # consistent with the message sitting on notifyd's port with its
+    # EVFILT_MACHPORT knote never having fired.
+    #
+    # If that is what is happening, ANY second notification will wake notifyd,
+    # and it will then drain BOTH messages -- so syslogd unblocks and
+    # "wbl: after process_message" appears. A message that never reached the
+    # port cannot be rescued that way, so the two cases are distinguishable
+    # from userland, with no kernel instrumentation.
+    #
+    #   syslogd unblocks  -> queued-but-undelivered: LOST WAKEUP CONFIRMED,
+    #                        and the bug is in the delivery path
+    #                        (filt_machport / ipc_pset_signal / libdispatch's
+    #                        Mach source), not in syslogd or notifyd
+    #   still wedged      -> the message never arrived, or notifyd cannot
+    #                        process it at all; different search entirely
+    #
+    echo "--- lost-wakeup test: poking notifyd from a third process (#91) ---"
+    if [ -x /usr/bin/notifyutil ] || command -v notifyutil >/dev/null 2>&1; then
+        notifyutil -p com.apple.system.lostwakeup.probe 2>&1 | sed 's/^/    /'
+    else
+        echo "    (notifyutil absent; posting via logger instead)"
+        logger -t lostwakeup "poke $$" 2>/dev/null || true
+    fi
+    sleep 3
+    if grep -q 'wbl: after process_message' /var/log/syslogd.stderr 2>/dev/null; then
+        echo "SYSLOG-LOSTWAKEUP-CONFIRMED: syslogd unblocked after a second" \
+             "notification -- the first message was queued on notifyd's port" \
+             "and never delivered"
+    else
+        echo "SYSLOG-LOSTWAKEUP-NO: still wedged after the poke -- not a" \
+             "simple lost wakeup; the message may never have reached notifyd"
+        echo "--- notifyd after the poke ---"
+        [ -n "$notifyd_pid" ] && procstat -kk "$notifyd_pid" 2>/dev/null | tail -n +2
+    fi
+    echo "--- syslogd.stderr tail after the poke ---"
+    tail -6 /var/log/syslogd.stderr 2>/dev/null
+
     echo "=== end diagnostics ==="
     echo "SYSLOG-RUN-FAIL: marker not found in /var/log/system.log"
     exit 1
