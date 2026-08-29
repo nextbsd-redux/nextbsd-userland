@@ -45,7 +45,8 @@ MAN=		notify.3 \
 SRCS=		libnotify.c \
 		notify_client.c \
 		table.c \
-		freebsd-shims/fileport_stub.c
+		freebsd-shims/fileport_stub.c \
+		freebsd-shims/libnotify_selfcontain.c
 
 # MIGOUT — directory holding the mig-generated *User.c / *.h.
 # build.sh sets this to $WORK/libnotify-mig. Empty on standalone

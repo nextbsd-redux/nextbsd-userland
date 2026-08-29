@@ -1434,8 +1434,16 @@ if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
                  "-- continuing; this is why the suite stalled here"
             procstat -kk "$_lc" 2>/dev/null | tail -n +2
         fi
+        echo "IPCFG-CI: launchctl $_act done"
     done
 fi
+# Heartbeat. boot-test.sh runs `set timeout 480` against the CONSOLE, so any
+# stretch of >480s without output kills the VM and truncates the log mid-run --
+# exactly what happened on amd64, where the log ends at the injection message
+# above with the step still marked success (boot_soft masks it). The bounded
+# launchctl waits added here are silent, so announce progress or a wait is
+# indistinguishable from a hang.
+echo "IPCFG-CI: reload block complete, entering ARP gate"
 
 # Surface the RFC 5227 ARP-probe result to the CONSOLE as soon as it happens
 # (#87). ipconfigd's xlog() writes to stderr, which its plist redirects to
@@ -1450,7 +1458,15 @@ fi
 # treats a failed arp_probe as no-conflict so a transient BPF error cannot
 # deadlock the lease -- so report that case explicitly rather than letting
 # the absence of a marker stall the suite.
-if [ -f /var/log/ipconfigd.stderr ]; then
+if [ ! -f /var/log/ipconfigd.stderr ]; then
+    # No stderr file at all. Previously this branch did not exist, so the
+    # whole block was skipped in SILENCE: "ipconfigd never wrote a log" and
+    # "the probe found nothing" both surfaced as a missing marker. Say which.
+    echo "IPCFG-ARP-SKIP: /var/log/ipconfigd.stderr absent"\
+         "(ipconfigd did not start, or its plist stderr redirect is not in"\
+         "effect) -- no result is possible"
+    ls -l /var/log/ipconfigd* 2>&1 | sed 's/^/    /' || true
+else
     i=0
     while [ $i -lt 30 ]; do
         if grep -qE 'IPCFG-ARP-OK|IPCFG-BOUND-FAIL' \
@@ -1485,7 +1501,15 @@ PRIMARY_IF=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exi
 [ -n "$PRIMARY_IF" ] || PRIMARY_IF=em0
 echo "==> primary interface: $PRIMARY_IF"
 
-if [ -f /var/log/ipconfigd.stderr ]; then
+if [ ! -f /var/log/ipconfigd.stderr ]; then
+    # No stderr file at all. Previously this branch did not exist, so the
+    # whole block was skipped in SILENCE: "ipconfigd never wrote a log" and
+    # "the probe found nothing" both surfaced as a missing marker. Say which.
+    echo "IPCFG-RENEW-SKIP: /var/log/ipconfigd.stderr absent"\
+         "(ipconfigd did not start, or its plist stderr redirect is not in"\
+         "effect) -- no result is possible"
+    ls -l /var/log/ipconfigd* 2>&1 | sed 's/^/    /' || true
+else
     i=0
     while [ $i -lt 30 ]; do
         if grep -q 'IPCFG-RENEW-OK\|IPCFG-STORE-FAIL\|IPCFG-BOUND-FAIL' \
