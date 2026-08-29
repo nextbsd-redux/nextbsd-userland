@@ -897,7 +897,12 @@ $TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
 # notifyd on demand. Deliberately NOT logger(1): that posts to syslogd via
 # /var/run/log and never reaches notifyd, which made the first version of that
 # test meaningless.
-$TCC -o "$TESTDIR/notifypoke" "$ROOT/tests/notifypoke.c" -lnotify -llaunch -lsystem_kernel
+# -llaunch drags in liblaunch.so, which itself references dispatch_* and is
+# linked with --no-allow-shlib-undefined, so every dispatch dependency has to
+# be named here too. Mirrors Libnotify/Makefile's own LDADD rather than
+# guessing the minimal set.
+$TCC -o "$TESTDIR/notifypoke" "$ROOT/tests/notifypoke.c" -lnotify -llaunch -lxpc \
+    -lsystem_dispatch -lsystem_kernel -l:libsystem_blocks.so
 
 comp "configd tests (reuse MIG configUser.c from \$CONFIGD_MIG)"
 for t in configtest notifytest patterntest listtest; do
