@@ -63,6 +63,12 @@
 	<dict>
 		<key>ASL_DISABLE</key>
 		<string>1</string>
+		<!-- The #91 process_message trace is OFF by default: it does
+		     fopen/fprintf/fclose per message, which is a syscall storm
+		     and an unbounded /tmp file on a real system. CI turns it on
+		     here because it is the only view into the residual race. -->
+		<key>SYSLOGD_TRACE_PROCESS_MSG</key>
+		<string>1</string>
 	</dict>
 	<key>MachServices</key>
 	<dict>
