@@ -897,7 +897,7 @@ $TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
 # notifyd on demand. Deliberately NOT logger(1): that posts to syslogd via
 # /var/run/log and never reaches notifyd, which made the first version of that
 # test meaningless.
-$TCC -o "$TESTDIR/notifypoke" "$ROOT/tests/notifypoke.c" -lnotify -lsystem_kernel
+$TCC -o "$TESTDIR/notifypoke" "$ROOT/tests/notifypoke.c" -lnotify -llaunch -lsystem_kernel
 
 comp "configd tests (reuse MIG configUser.c from \$CONFIGD_MIG)"
 for t in configtest notifytest patterntest listtest; do

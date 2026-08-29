@@ -1083,15 +1083,29 @@ else
     # logger, which posts to syslogd via /var/run/log and never reaches
     # notifyd -- so it answered a question nobody asked and reported
     # LOSTWAKEUP-NO on a poke that never happened.
+    # Capture the exit status. Piping straight into sed threw it away, which
+    # is how this test rendered SYSLOG-LOSTWAKEUP-NO three times for a poke
+    # that never actually happened (logger fallback, then a libnotify load
+    # failure, then notify_post returning NOTIFY_STATUS_FAILED). A verdict is
+    # only meaningful if the poke itself succeeded.
     if [ -x /usr/tests/freebsd-launchd-mach/notifypoke ]; then
         /usr/tests/freebsd-launchd-mach/notifypoke \
-            com.apple.system.lostwakeup.probe 2>&1 | sed 's/^/    /'
+            com.apple.system.lostwakeup.probe >/tmp/notifypoke.out 2>&1
+        _poke_rc=$?
+        sed 's/^/    /' /tmp/notifypoke.out
     else
+        _poke_rc=127
         echo "    SYSLOG-LOSTWAKEUP-SKIP: notifypoke not installed; cannot"
         echo "    poke notifyd, so this run proves nothing either way"
     fi
     sleep 3
-    if grep -q 'wbl: after process_message' /var/log/syslogd.stderr 2>/dev/null; then
+    if [ "$_poke_rc" -ne 0 ]; then
+        echo "SYSLOG-LOSTWAKEUP-INVALID: the poke itself failed (rc=$_poke_rc)" \
+             "-- this run measures NOTHING about lost wakeups. The notifypoke" \
+             "output above says which stage failed (bootstrap lookup vs post)."
+        echo "--- notifyd at the time of the failed poke ---"
+        [ -n "$notifyd_pid" ] && procstat -kk "$notifyd_pid" 2>/dev/null | tail -n +2
+    elif grep -q 'wbl: after process_message' /var/log/syslogd.stderr 2>/dev/null; then
         echo "SYSLOG-LOSTWAKEUP-CONFIRMED: syslogd unblocked after a second" \
              "notification -- the first message was queued on notifyd's port" \
              "and never delivered"
