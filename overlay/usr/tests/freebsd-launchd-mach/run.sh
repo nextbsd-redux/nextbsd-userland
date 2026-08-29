@@ -1303,6 +1303,20 @@ if [ -f "$IPCFG_PLIST" ] && ! grep -q IPCONFIGD_FAST_LEASE "$IPCFG_PLIST"; then
     launchctl load   "$IPCFG_PLIST" 2>/dev/null || true
 fi
 
+# The NIC is arch-dependent: amd64 boots with `-nic user,model=e1000` (em0),
+# arm64 with virtio-net-pci (vtnet0). Hardcoding em0 made every
+# interface-named assertion below fail on arm64 -- IPCFG-RPC-FAIL and
+# IPCFG-IPCONFIG-FAIL -- while ipconfigd itself was working perfectly
+# (ipconfig_if_count returned 1; only the named lookup failed).
+#
+# Discover the primary interface from the default route, which is the same
+# interface ipconfigd elects as primary. Computed unconditionally: doing it
+# inside the ipconfigd.stderr block below would silently fall back to em0
+# whenever that file is absent, which is exactly the bug it fixes.
+PRIMARY_IF=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
+[ -n "$PRIMARY_IF" ] || PRIMARY_IF=em0
+echo "==> primary interface: $PRIMARY_IF"
+
 if [ -f /var/log/ipconfigd.stderr ]; then
     i=0
     while [ $i -lt 30 ]; do
@@ -1316,10 +1330,10 @@ if [ -f /var/log/ipconfigd.stderr ]; then
     echo "--- /var/log/ipconfigd.stderr ---"
     cat /var/log/ipconfigd.stderr
     echo "--- end ipconfigd.stderr ---"
-    # Also dump the bound state for visibility — ifconfig em0 + the
+    # Also dump the bound state for visibility — ifconfig + the
     # default route + resolv.conf. Best-effort.
-    echo "--- ifconfig em0 ---"
-    ifconfig em0 2>&1 || true
+    echo "--- ifconfig $PRIMARY_IF ---"
+    ifconfig "$PRIMARY_IF" 2>&1 || true
     echo "--- netstat -rn (default route) ---"
     netstat -rn -f inet 2>&1 | head -20 || true
     echo "--- netstat -rn -f inet6 (iter 7a SLAAC default) ---"
@@ -1339,7 +1353,7 @@ ipconfigrpctest=/usr/tests/freebsd-launchd-mach/ipconfigrpctest
 if [ ! -x "$ipconfigrpctest" ]; then
     echo "IPCFG-RPC-FAIL: $ipconfigrpctest missing"
 else
-    "$ipconfigrpctest" || true	# marker gates in boot-test.sh
+    "$ipconfigrpctest" "${PRIMARY_IF:-em0}" || true	# marker gates in boot-test.sh
 fi
 
 # IPCFG-IPCONFIG — iter 8 Apple-shape CLI smoke. The same
@@ -1499,10 +1513,11 @@ ipconfig_cli=/usr/sbin/ipconfig
 if [ ! -x "$ipconfig_cli" ]; then
     echo "IPCFG-IPCONFIG-FAIL: $ipconfig_cli missing"
 else
+    cli_if=${PRIMARY_IF:-em0}
     cli_count=$("$ipconfig_cli" ifcount 2>&1 || true)
-    cli_addr=$("$ipconfig_cli" getifaddr em0 2>&1 || true)
+    cli_addr=$("$ipconfig_cli" getifaddr "$cli_if" 2>&1 || true)
     echo "  ipconfig ifcount -> $cli_count"
-    echo "  ipconfig getifaddr em0 -> $cli_addr"
+    echo "  ipconfig getifaddr $cli_if -> $cli_addr"
     case "$cli_count" in
         ''|*[!0-9]*)
             echo "IPCFG-IPCONFIG-FAIL: ifcount non-numeric '$cli_count'"
@@ -1511,9 +1526,9 @@ else
             if [ "$cli_count" -lt 1 ]; then
                 echo "IPCFG-IPCONFIG-FAIL: ifcount=$cli_count < 1"
             elif [ "$cli_addr" != "10.0.2.15" ]; then
-                echo "IPCFG-IPCONFIG-FAIL: em0 addr '$cli_addr' != 10.0.2.15"
+                echo "IPCFG-IPCONFIG-FAIL: $cli_if addr '$cli_addr' != 10.0.2.15"
             else
-                echo "IPCFG-IPCONFIG-OK: ipconfig ifcount=$cli_count em0=$cli_addr"
+                echo "IPCFG-IPCONFIG-OK: ipconfig ifcount=$cli_count $cli_if=$cli_addr"
             fi
             ;;
     esac
