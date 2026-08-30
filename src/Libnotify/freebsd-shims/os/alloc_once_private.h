@@ -26,16 +26,18 @@ typedef int os_alloc_token_t;
 #define OS_ALLOC_ONCE_KEY_LIBSYSTEM_TRACE	8
 #define OS_ALLOC_ONCE_KEY_MAX			32
 
-/* Generic once-allocator. Apple's version takes a slot index and a
- * size; returns the (zero-initialized) pointer, allocating once
- * per slot. Our stub uses a malloc'd block on first call. */
-static inline void *
-os_alloc_once(os_alloc_token_t token, size_t sz, void (*init)(void *))
-{
-	(void)token;
-	void *p = calloc(1, sz);
-	if (p && init) init(p);
-	return p;
-}
+/*
+ * Generic once-allocator: one zero-initialised block per slot, init() run
+ * exactly once, for the life of the process.
+ *
+ * DECLARED here, DEFINED in freebsd-shims/os_alloc_once.c. That split is
+ * deliberate. The previous version was a static inline that called
+ * calloc()+init() unconditionally and ignored the token, so every caller got
+ * a fresh struct -- see os_alloc_once.c for what that cost libnotify. Making
+ * it a static inline again would reintroduce the same class of bug even if
+ * the body were correct, because each translation unit would get its own
+ * slot table and hand out its own "singleton".
+ */
+void *os_alloc_once(os_alloc_token_t token, size_t sz, void (*init)(void *));
 
 #endif

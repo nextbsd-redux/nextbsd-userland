@@ -27,12 +27,26 @@
 #include <dispatch/dispatch.h>
 #include <pthread.h>
 
-#if __has_include(<os/alloc_once_private.h>)
-#include <os/alloc_once_private.h>
-#if defined(OS_ALLOC_ONCE_KEY_LIBLAUNCH)
-#define _LIBLAUNCH_HAS_ALLOC_ONCE 1
-#endif
-#endif
+/*
+ * Deliberately NOT using os_alloc_once() here, even though the header exists.
+ *
+ * _launch_globals() is a static inline in this header, included by many
+ * translation units. os_alloc_once()'s slot table is one object per library,
+ * so routing every TU's _launch_globals() through it is fine in principle --
+ * but liblaunch already carries its own correct implementation just below
+ * (_launch_globals_impl(), a plain pthread_once), and using it keeps the
+ * singleton's lifetime owned by this library rather than by a shim header
+ * that happens to be on the include path.
+ *
+ * That matters because the shim was, until #78, a static inline that called
+ * calloc()+init() on EVERY call while its comment claimed it allocated once.
+ * liblaunch silently inherited that via __has_include: every _launch_globals()
+ * returned a fresh zeroed struct, so the launchd connection state, the
+ * socket fd and the per-process mutex were re-created on every call into
+ * this library. Preferring the local pthread_once removes the dependency on
+ * that header being correct.
+ */
+#define _LIBLAUNCH_HAS_ALLOC_ONCE 0
 
 typedef struct _launch *launch_t;
 
