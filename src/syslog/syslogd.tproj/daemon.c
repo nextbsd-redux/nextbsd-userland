@@ -69,7 +69,6 @@ extern int asl_action_reset(void);
 extern int asl_action_control_set_param(const char *s);
 
 static char myname[MAXHOSTNAMELEN + 1] = {0};
-static int name_change_token = -1;
 
 static OSSpinLock count_lock = 0;
 
@@ -315,57 +314,37 @@ stats_msg(const char *sender, time_t now, asl_msg_t *msg)
 static const char *
 whatsmyhostname()
 {
-	static dispatch_once_t once;
-	int check, status;
-
 	if (global.hostname != NULL) return global.hostname;
 
 	/*
-	 * The hostname-change registration USED to happen here, inside this
-	 * dispatch_once. It does not any more, and that is #78.
+	 * No notify_check() here, and no cached-until-invalidated name.
 	 *
-	 * notify_register_check() is a synchronous, untimed MIG RPC to
-	 * notifyd. This function is reached from write_boot_log() ->
-	 * process_message() -> aslmsg_verify(), which runs BEFORE main()
-	 * dispatches database_server(). So an RPC that never got a reply
-	 * blocked syslogd's startup permanently, database_server() was never
-	 * dispatched, nothing ever received on the ASL service port, and
-	 * every syslog client on the machine then blocked forever in
-	 * ipc_mqueue_receive waiting for a reply from a server that had not
-	 * started listening. One unanswered optional RPC took out all system
-	 * logging, and `launchctl list` showed syslogd status 0 throughout,
-	 * because it had not crashed -- it had never finished starting.
+	 * This used to call notify_check(name_change_token) on EVERY message to
+	 * decide whether the cached name was still good. notify_check() is only
+	 * the cheap shared-memory read Apple intends when the token is
+	 * memory-backed (NOTIFY_TYPE_MEMORY). In this port it is not, so it
+	 * falls through to the notify_server_port branch and performs a
+	 * synchronous, untimed MIG RPC to notifyd -- per log message. One
+	 * unanswered reply leaves the caller parked in ipc_mqueue_receive
+	 * forever, which is why individual sends hung while syslogd itself sat
+	 * healthy in dispatch_main().
 	 *
-	 * The registration is only a cache-invalidation hint: it tells us
-	 * when to stop trusting `myname`. The code below already handles not
-	 * having it -- name_change_token starts at -1 and every use is
-	 * guarded -- in which case we simply call gethostname() each time.
-	 * That is a lost optimisation, not a lost function.
+	 * Measured on arm64 hardware, bounded `syslog -s` round trips, one
+	 * boot, notifyd toggled twice to establish causation:
 	 *
-	 * So it now happens once, from main(), after the service is up. See
-	 * syslogd_register_hostname_notify(). If notifyd never answers, the
-	 * cost is a gethostname() per message instead of a dead machine.
+	 *     with notifyd:     9/20, 6/20
+	 *     without notifyd:  20/20, 20/20
 	 *
-	 * This does NOT explain why the RPC goes unanswered; that is still
-	 * open. It removes the coupling that turned it into a total outage.
+	 * Removing notifyd only helped because it makes the registration fail,
+	 * leaving name_change_token < 0 so this call was skipped. The RPC on the
+	 * message path was the defect; notifyd's absence merely hid it.
+	 *
+	 * gethostname() is a sysctl. It cannot block on another process, and its
+	 * answer is strictly more current than the cache it replaces. The
+	 * optimisation removed here is only worth having once notify_check() is
+	 * genuinely a shared-memory read; restoring that is the proper fix and
+	 * is tracked separately.
 	 */
-	dispatch_once(&once, ^{
-		snprintf(myname, sizeof(myname), "%s", "localhost");
-	});
-
-	check = 1;
-	status = 0;
-
-	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
-	  if (_h) { fprintf(_h, "[%d] wmh: before notify_check (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
-
-	if (name_change_token >= 0) status = notify_check(name_change_token, &check);
-
-	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
-	  if (_h) { fprintf(_h, "[%d] wmh: after notify_check status=%d check=%d\n", getpid(), status, check); fclose(_h); } }
-
-	if ((status == 0) && (check == 0)) return (const char *)myname;
-
 	if (gethostname(myname, MAXHOSTNAMELEN) < 0)
 	{
 		snprintf(myname, sizeof(myname), "%s", "localhost");
@@ -373,6 +352,14 @@ whatsmyhostname()
 	else
 	{
 		char *dot;
+
+		/*
+		 * An empty hostname is not a usable ASL_KEY_HOST value; treat it
+		 * the same as the failure case rather than emitting "".
+		 */
+		if (myname[0] == '\0')
+			snprintf(myname, sizeof(myname), "%s", "localhost");
+
 		dot = strchr(myname, '.');
 		if (dot != NULL) *dot = '\0';
 	}
@@ -380,23 +367,6 @@ whatsmyhostname()
 	return (const char *)myname;
 }
 
-/*
- * Register for hostname-change notifications, off the boot-critical path.
- *
- * Called once from main() after database_server() has been dispatched, so a
- * notify RPC that never returns can no longer stop syslogd from serving. See
- * the comment in whatsmyhostname() for why this moved (#78).
- */
-void
-syslogd_register_hostname_notify(void)
-{
-	int tok = -1;
-
-	if (name_change_token >= 0) return;
-
-	if (notify_register_check(kNotifySCHostNameChange, &tok) == NOTIFY_STATUS_OK)
-		name_change_token = tok;
-}
 
 void
 asl_client_count_increment()
