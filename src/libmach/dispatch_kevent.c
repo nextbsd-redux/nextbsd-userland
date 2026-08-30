@@ -230,6 +230,33 @@ reg_remove_locked(struct mach_kev_reg *target)
  * `out` changelist entry. Returns 0 on success, errno on failure with all
  * partial state cleaned up.
  */
+/*
+ * Release a port set name.
+ *
+ * mach_port_deallocate() only drops send / send-once / dead-name urefs; against
+ * a MACH_PORT_TYPE_PORT_SET entry it returns KERN_INVALID_RIGHT and does
+ * nothing at all. Every wrap pset allocated here was therefore leaked -- and
+ * because port names are file descriptors in this port (ipc_entry.c allocates
+ * them through kern_fdalloc), each leak also burns an fd.
+ *
+ * This library already documents the rule for the analogous receive-right case,
+ * in mach_traps.c:797: "must be reclaimed with mach_port_mod_refs(...,
+ * RIGHT_RECEIVE, -1), not mach_port_deallocate (which only drops send/send-once
+ * urefs) -- the previous error-path code used the wrong call." The same is true
+ * of port sets; the rule was written down and then broken next door.
+ *
+ * Measured on hardware before this fix (#105): RPC-driven, monotonic fd growth,
+ * never reclaimed, ~1 per 27-60 RPCs in both client and server.
+ */
+static void
+reg_release_pset(mach_port_name_t pset)
+{
+	if (pset == MACH_PORT_NULL)
+		return;
+	(void)mach_port_mod_refs(mach_task_self(), pset,
+	    MACH_PORT_RIGHT_PORT_SET, -1);
+}
+
 static int
 reg_create(int kq, const struct kevent_qos_s *src, struct mach_kev_reg **out)
 {
@@ -254,7 +281,7 @@ reg_create(int kq, const struct kevent_qos_s *src, struct mach_kev_reg **out)
 	if (kr != KERN_SUCCESS) {
 		/* ident is likely already a pset. Drop our wrap pset and use
 		 * the ident pset directly as the EVFILT_MACHPORT target. */
-		(void)mach_port_deallocate(mach_task_self(), wrap);
+		reg_release_pset(wrap);
 		wrap = (mach_port_name_t)src->ident;
 	}
 
@@ -273,7 +300,7 @@ reg_create(int kq, const struct kevent_qos_s *src, struct mach_kev_reg **out)
 fail:
 	if (wrap != MACH_PORT_NULL &&
 	    wrap != (mach_port_name_t)src->ident) {
-		(void)mach_port_deallocate(mach_task_self(), wrap);
+		reg_release_pset(wrap);
 	}
 	free(r);
 	return (err);
@@ -289,14 +316,26 @@ reg_destroy(struct mach_kev_reg *r)
 	while (r->backlog_head != NULL) {
 		struct mach_kev_msg *bm = r->backlog_head;
 		r->backlog_head = bm->next;
-		if (bm->hdr != NULL)
+		if (bm->hdr != NULL) {
+			/*
+			 * mach_msg_destroy() before free(), always. These
+			 * buffers hold a received message: freeing the memory
+			 * leaks every port right and OOL region inside it. The
+			 * remote port is typically the sender's reply port, so
+			 * dropping its send right here means the peer never
+			 * goes dead-name and its dead-name notification never
+			 * fires. Apple pairs the two on every drop path
+			 * (libdispatch mach.c:624, :680, :811).
+			 */
+			mach_msg_destroy(bm->hdr);
 			free(bm->hdr);
+		}
 		free(bm);
 	}
 	r->backlog_tail = NULL;
 	/*
-	 * Deallocate our wrap pset (unless it's the caller-owned ident pset).
-	 * Destroying the pset detaches any native EVFILT_MACHPORT knote on it
+	 * Release our wrap pset (unless it's the caller-owned ident pset).
+	 * Releasing the pset detaches any native EVFILT_MACHPORT knote on it
 	 * kernel-side (ipc_pset_destroy → knlist_clear), so the EV_DELETE the
 	 * caller submits afterwards finds the knote already gone and
 	 * filt_machportdetach (kn_knlist == NULL guard) is a no-op — no UAF,
@@ -305,7 +344,18 @@ reg_destroy(struct mach_kev_reg *r)
 	 */
 	if (r->wrap_pset != MACH_PORT_NULL &&
 	    r->wrap_pset != (mach_port_name_t)r->ident) {
-		(void)mach_port_deallocate(mach_task_self(), r->wrap_pset);
+		/*
+		 * Pull the caller's port back out of the set BEFORE releasing
+		 * it. Releasing a set does not un-member its ports, so the
+		 * caller's receive right would otherwise stay a member of a set
+		 * nothing receives on -- after which a direct mach_msg() on
+		 * that port is invalid (MACH_RCV_IN_SET) and anything sent to
+		 * it is never drained. That is the shape dispatch_mig_server()
+		 * uses, so it would strand exactly the daemons that matter.
+		 */
+		(void)mach_port_move_member(mach_task_self(),
+		    (mach_port_name_t)r->ident, MACH_PORT_NULL);
+		reg_release_pset(r->wrap_pset);
 	}
 	free(r);
 }
@@ -656,6 +706,33 @@ drain_backlog_to_eventlist(int kq, struct kevent_qos_s *eventlist,
 {
 	struct mach_kev_reg *r;
 	int filled = 0;
+/*
+ * Report per-change failures as EV_ERROR events, the way a real kevent() does.
+ *
+ * libdispatch's KEVENT_FLAG_ERROR_EVENTS path inspects nothing else: it scans
+ * for (flags & EV_ERROR) && data, and treats a zero/absent result as "the
+ * change installed". Returning a non-negative count without these events is
+ * how a failed registration became a permanently ARMED unote on a knote that
+ * does not exist.
+ *
+ * ident / filter / udata are copied from the caller's original change so the
+ * event lands on the right unote.
+ */
+static int
+emit_failed_changes(struct kevent_qos_s *eventlist, int nevents, int filled,
+    const struct kevent_qos_s *failed_ch, const int *failed_err, int nfailed)
+{
+	int k;
+
+	for (k = 0; k < nfailed && filled < nevents; k++) {
+		eventlist[filled] = failed_ch[k];
+		eventlist[filled].flags |= EV_ERROR;
+		eventlist[filled].data = (int64_t)failed_err[k];
+		filled++;
+	}
+	return (filled);
+}
+
 
 	pthread_mutex_lock(&g_reg_mtx);
 	for (r = g_reg_head; r != NULL && filled < nevents; r = r->next) {
@@ -684,6 +761,16 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 	int saved_errno = 0;
 	int filled = 0;
 	int i, n, rc;
+	/*
+	 * Per-change failures. A change that cannot be translated is NOT
+	 * submitted to the kernel; it is reported back as an EV_ERROR event,
+	 * which is what a real kevent() does and the only form libdispatch
+	 * inspects on a KEVENT_FLAG_ERROR_EVENTS call.
+	 */
+	struct kevent_qos_s failed_ch[KEVENT_STACK_SLOTS];
+	int failed_err[KEVENT_STACK_SLOTS];
+	int nfailed = 0;
+	int nsubmit = 0;
 
 	(void)data_out;
 	if (data_available != NULL)
@@ -704,13 +791,48 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 		for (i = 0; i < nchanges; i++) {
 			if (changelist[i].filter == EVFILT_MACHPORT) {
 				if (machport_change_translate(kq,
-				    &changelist[i], &scratch_ch[i]) != 0) {
+				    &changelist[i],
+				    &scratch_ch[nsubmit]) != 0) {
+					/*
+					 * Record the failure for this slot and
+					 * submit nothing for it.
+					 *
+					 * This used to substitute an EV_ADD on
+					 * EVFILT_READ against fd (uintptr_t)-1
+					 * and still return a non-negative count,
+					 * so libdispatch read it as success and
+					 * left the unote ARMED on a knote that
+					 * does not exist -- a permanent silent
+					 * hang of that channel. When the bogus
+					 * fd did surface it produced EBADF,
+					 * which _dispatch_kq_poll turns into
+					 * DISPATCH_CLIENT_CRASH("Do not close
+					 * random Unix descriptors") -- a crash
+					 * blamed on the wrong thing entirely.
+					 *
+					 * A real kevent reports per-change
+					 * failure as an EV_ERROR event carrying
+					 * errno in .data, which is the only
+					 * thing libdispatch's ERROR_EVENTS loop
+					 * inspects. Synthesize exactly that,
+					 * preserving the caller's ident/filter/
+					 * udata so it lands on the right unote.
+					 */
 					saved_errno = errno;
-					EV_SET(&scratch_ch[i], (uintptr_t)-1,
-					    EVFILT_READ, EV_ADD, 0, 0, NULL);
+					if (nfailed < KEVENT_STACK_SLOTS) {
+						failed_ch[nfailed] =
+						    changelist[i];
+						failed_err[nfailed] =
+						    saved_errno;
+						nfailed++;
+					}
+					continue;
 				}
+				nsubmit++;
 			} else {
-				qos_to_kev(&changelist[i], &scratch_ch[i]);
+				qos_to_kev(&changelist[i],
+				    &scratch_ch[nsubmit]);
+				nsubmit++;
 			}
 		}
 	}
@@ -720,7 +842,25 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 	 * eventlist. A burst may have left messages queued from a
 	 * prior call.
 	 */
-	if (nevents > 0)
+	/*
+	 * KEVENT_FLAG_ERROR_EVENTS means "report results for the submitted
+	 * changes, do NOT dequeue pending events". libdispatch relies on that
+	 * literally: _dispatch_kq_drain() keeps only entries with EV_ERROR set
+	 * on such a call and discards everything else
+	 * (event_kevent.c, the `flags & KEVENT_FLAG_ERROR_EVENTS` loop).
+	 *
+	 * Draining here handed real Mach messages back on a registration call
+	 * and libdispatch threw them away. The message was already removed from
+	 * the kernel queue, so it was gone -- no retry possible.
+	 *
+	 * That is a hang, and a timing-dependent one:
+	 * _dispatch_mach_reply_kevent_register() runs AFTER the request is sent
+	 * (mach.c: send, then register), so when a fast server's reply wins the
+	 * race it is consumed and destroyed by the very call registering
+	 * interest in it. The client then waits forever while the server is
+	 * healthy and answering everyone else.
+	 */
+	if (nevents > 0 && !(flags & KEVENT_FLAG_ERROR_EVENTS))
 		filled = drain_backlog_to_eventlist(kq, eventlist, nevents);
 
 	/*
@@ -729,6 +869,20 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 	 * have eventlist budget AFTER backlog drain. If backlog
 	 * already filled the budget AND no changes, skip the syscall.
 	 */
+	if (nsubmit == 0 && (nchanges == 0 || nfailed == nchanges)) {
+		/*
+		 * Nothing to submit. Either the caller asked for no changes, or
+		 * every change failed translation -- in which case the failures
+		 * are the result, and the syscall must not run.
+		 */
+		filled = emit_failed_changes(eventlist, nevents, filled,
+		    failed_ch, failed_err, nfailed);
+		if (nchanges > KEVENT_STACK_SLOTS)
+			free(scratch_ch);
+		if (saved_errno != 0)
+			errno = saved_errno;
+		return (filled);
+	}
 	if (nchanges == 0 && filled == nevents) {
 		if (saved_errno != 0)
 			errno = saved_errno;
@@ -746,7 +900,7 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 		}
 	}
 
-	rc = __sys_kevent(kq, nchanges > 0 ? scratch_ch : NULL, nchanges,
+	rc = __sys_kevent(kq, nsubmit > 0 ? scratch_ch : NULL, nsubmit,
 	    ev_budget > 0 ? scratch_ev : NULL, ev_budget, timeout);
 
 	if (nchanges > KEVENT_STACK_SLOTS)
@@ -796,6 +950,9 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 
 	if (ev_budget > KEVENT_STACK_SLOTS)
 		free(scratch_ev);
+
+	filled = emit_failed_changes(eventlist, nevents, filled,
+	    failed_ch, failed_err, nfailed);
 
 	if (saved_errno != 0)
 		errno = saved_errno;
