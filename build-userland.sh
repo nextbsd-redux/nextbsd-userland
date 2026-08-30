@@ -625,8 +625,15 @@ done
 # friends while still silently dropping the one notification #78 needs.
 # Verified by generating both ways and diffing the routine table.
 note "mig: notify.defs (Mach notification subsystem, base 64)"
+# The -header/-user names are deliberately NOT notify.h / notifyUser.c.
+# MIGOUT is on notifyd's include path, and libnotify's PUBLIC notify.h --
+# which defines NOTIFY_STATUS_OK and friends -- would be shadowed by a
+# generated file of the same name, so notifyd.c fails to compile with
+# "use of undeclared identifier 'NOTIFY_STATUS_OK'". notifyServer.h does not
+# reference the -header output at all (it includes <mach/notify.h>), so the
+# name is free to be anything that does not collide.
 run_mig "$LIBNOTIFY_MIG" $NOTIFY_INCS -DMACH_NOTIFY_SEND_POSSIBLE_EXPECTED=1 \
-    -header "notify.h" -user "notifyUser.c" \
+    -header "mach_notify_gen.h" -user "mach_notify_genUser.c" \
     -server "notifyServer.c" -sheader "notifyServer.h" \
     "$SRC/Libnotify/notify.defs" \
     || { echo "FAIL: mig could not process notify.defs"; exit 1; }
@@ -635,6 +642,12 @@ for f in notifyServer.c notifyServer.h; do
 done
 grep -q "do_mach_notify_send_possible" "$LIBNOTIFY_MIG/notifyServer.c" \
     || { echo "FAIL: notifyServer.c has no send_possible -- is MACH_NOTIFY_SEND_POSSIBLE_EXPECTED set?"; exit 1; }
+# libnotify's public notify.h must never be shadowed by MIG output.
+if [ -e "$LIBNOTIFY_MIG/notify.h" ]; then
+    echo "FAIL: MIG emitted notify.h into MIGOUT -- it shadows libnotify's public"
+    echo "      header, and notifyd.c then fails on NOTIFY_STATUS_OK."
+    exit 1
+fi
 
 comp "libnotify"
 mkdir -p "$DESTDIR/usr/lib/system"
