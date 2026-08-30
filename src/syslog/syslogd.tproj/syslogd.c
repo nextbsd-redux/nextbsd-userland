@@ -790,6 +790,7 @@ main(int argc, const char *argv[])
 	_PJ_BC("after init_modules");
 
 #if !TARGET_OS_SIMULATOR
+	_PJ_BC("before notify_register_dispatch(SCNetworkChange)");
 	asldebug("setting up network change notification handler\n");
 
 	/* network change notification resets UDP and BSD modules */
@@ -799,6 +800,7 @@ main(int argc, const char *argv[])
 	});
 #endif
 
+	_PJ_BC("after SCNetworkChange; before quota notify_register_dispatch");
 	asldebug("setting up quota notification handler\n");
 
 	notify_key = NULL;
@@ -837,9 +839,12 @@ main(int argc, const char *argv[])
 	 * SIGHUP is unavailable until libdispatch source registration works.
 	 */
 
+	_PJ_BC("after quota; before notify_register_plain(ASLDBUpdate)");
 	/* register for DB notification (posted by dbserver) for performance */
 	notify_register_plain(kNotifyASLDBUpdate, &asl_db_token);
+	_PJ_BC("after notify_register_plain(ASLDBUpdate)");
 
+	_PJ_BC("before MARK timer setup");
 	/* timer for MARK facility */
 	if (global.mark_time > 0)
 	{
@@ -848,7 +853,9 @@ main(int argc, const char *argv[])
 			asl_mark();
 		});
 		dispatch_source_set_timer(global.mark_timer, dispatch_time(DISPATCH_TIME_NOW, global.mark_time * NSEC_PER_SEC), global.mark_time * NSEC_PER_SEC, 0);
+		_PJ_BC("before dispatch_resume(mark_timer)");
 		dispatch_resume(global.mark_timer);
+		_PJ_BC("after dispatch_resume(mark_timer)");
 	}
 
 	_PJ_BC("about to dispatch database_server");
