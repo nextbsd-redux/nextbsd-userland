@@ -181,3 +181,19 @@ typedef struct notify_globals_s *notify_globals_t;
 
 __private_extern__ uint32_t _notify_lib_peek(notify_state_t *ns, pid_t pid, int token, int *val);
 
+
+/*
+ * Raw kern_return_t behind the most recent notify RPC failure on this thread
+ * (#98). KERN_SUCCESS if the last call succeeded.
+ *
+ * libnotify collapses errors twice before a caller sees them: _notify_lib_init
+ * replaces the kern_return_t with a category, and IS_INTERNAL_ERROR() then
+ * flattens every status >= 11 into NOTIFY_STATUS_FAILED. By the time
+ * notify_post() returns, "the RPC failed" is all that survives -- not how.
+ * That cost several debugging cycles on #91, where the answer was
+ * MIG_TRAILER_ERROR (-309) and the caller saw 1000000.
+ *
+ * Diagnostic only. The documented NOTIFY_STATUS_* value remains the contract;
+ * this exists so that "it failed" can be turned back into "how it failed".
+ */
+extern kern_return_t notify_last_mach_error(void);

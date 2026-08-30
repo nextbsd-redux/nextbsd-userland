@@ -363,6 +363,41 @@ _notify_client_log(int level, const char *fmt, ...)
  * something explicitly asks. stderr, not ASL, so it cannot deadlock against
  * the thing being diagnosed.
  */
+/*
+ * Last raw kern_return_t from a failed notify RPC (#98).
+ *
+ * libnotify collapses errors twice before a caller sees them: _notify_lib_init
+ * replaces the kern_return_t with a category (SERVER_NOT_FOUND vs
+ * SERVER_CHECKIN_FAILED), and IS_INTERNAL_ERROR() then flattens every status
+ * >= 11 into NOTIFY_STATUS_FAILED. By the time notify_post() returns, "the RPC
+ * failed" is all that survives -- not how.
+ *
+ * That cost several debugging cycles on #91, where the answer was
+ * MIG_TRAILER_ERROR (-309) and the caller saw 1000000.
+ *
+ * Rather than change the status values, which are API, keep the raw code
+ * retrievable. Thread-local because two threads can be mid-RPC at once and a
+ * shared global would hand back the wrong one.
+ */
+static _Thread_local kern_return_t _notify_last_kr = KERN_SUCCESS;
+
+static void
+_notify_set_last_kr(kern_return_t kr)
+{
+	_notify_last_kr = kr;
+}
+
+/*
+ * Retrieve the raw kern_return_t behind the most recent notify failure on
+ * this thread, or KERN_SUCCESS if the last call succeeded. Diagnostic only --
+ * do not branch on it in shipping code; the documented status is the contract.
+ */
+kern_return_t
+notify_last_mach_error(void)
+{
+	return _notify_last_kr;
+}
+
 static void
 _notify_report_stderr(const char *fmt, ...)
 {
@@ -1150,6 +1185,7 @@ _notify_lib_init_locked(notify_globals_t globals, uint32_t event)
 		     * MACH_RCV_* vs MACH_SEND_* vs a MIG error is. __LINE__ tells
 		     * the checkin site apart from the common-port site.
 		     */
+		    _notify_set_last_kr(kstatus);
 		    _notify_report_stderr("_notify_lib_init: MIG call failed, "
 			"kstatus=0x%x server_port=0x%x line %d", kstatus,
 			globals->notify_server_port, __LINE__);
@@ -1226,6 +1262,7 @@ _notify_lib_init_locked(notify_globals_t globals, uint32_t event)
 		     * MACH_RCV_* vs MACH_SEND_* vs a MIG error is. __LINE__ tells
 		     * the checkin site apart from the common-port site.
 		     */
+		    _notify_set_last_kr(kstatus);
 		    _notify_report_stderr("_notify_lib_init: MIG call failed, "
 			"kstatus=0x%x server_port=0x%x line %d", kstatus,
 			globals->notify_server_port, __LINE__);
