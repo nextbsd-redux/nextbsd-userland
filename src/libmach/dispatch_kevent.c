@@ -253,8 +253,8 @@ reg_release_pset(mach_port_name_t pset)
 {
 	if (pset == MACH_PORT_NULL)
 		return;
-	(void)mach_port_mod_refs(mach_task_self(), pset,
-	    MACH_PORT_RIGHT_PORT_SET, -1);
+	/* BISECT: F2 disabled -- restore the historical no-op release. */
+	(void)mach_port_deallocate(mach_task_self(), pset);
 }
 
 static int
@@ -353,8 +353,7 @@ reg_destroy(struct mach_kev_reg *r)
 		 * it is never drained. That is the shape dispatch_mig_server()
 		 * uses, so it would strand exactly the daemons that matter.
 		 */
-		(void)mach_port_move_member(mach_task_self(),
-		    (mach_port_name_t)r->ident, MACH_PORT_NULL);
+		/* BISECT: F2 un-member disabled. */
 		reg_release_pset(r->wrap_pset);
 	}
 	free(r);
