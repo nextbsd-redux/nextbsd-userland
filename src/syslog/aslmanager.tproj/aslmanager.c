@@ -165,7 +165,11 @@ cli_main(int argc, char *argv[])
 
 	for (i = 1; i < argc; i++)
 	{
-		if (!strcmp(argv[i], "-q"))
+		if (!strcmp(argv[i], "-cli"))
+		{
+			/* consumed in main(); ignore here */
+		}
+		else if (!strcmp(argv[i], "-q"))
 		{
 			quiet = true;
 		}
@@ -409,6 +413,32 @@ int
 main(int argc, char *argv[])
 {
 	int64_t is_managed = 0;
+	int i;
+
+	/*
+	 * -cli forces the one-shot rotation path even when launchd started us.
+	 *
+	 * Apple's design is: syslogd pokes the com.apple.aslmanager XPC service,
+	 * launchd demand-launches this process, is_managed comes back 1, we
+	 * become an XPC listener, and cli_main() runs per request.
+	 *
+	 * That whole path is dead here. asl_trigger_aslmanager() is a no-op
+	 * (asl_util.c) because our libxpc cannot send to a Mach service that is
+	 * not running yet -- the blocking form hangs syslogd before it binds
+	 * /var/run/log, the async form crashes it. See #80.
+	 *
+	 * So nothing ever launches us, and /var/log/asl is never expired. A
+	 * StartInterval alone would not help: a launchd-started process reports
+	 * is_managed = 1 and would just sit in the listener waiting for XPC that
+	 * never arrives. This flag lets a periodic job reach the work directly.
+	 *
+	 * Remove once libxpc can deliver to a demand-launched Mach service; the
+	 * XPC path is the correct one.
+	 */
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-cli") == 0)
+			return cli_main(argc, argv);
+	}
 
 	vproc_swap_integer(NULL, VPROC_GSK_IS_MANAGED, NULL, &is_managed);
 
