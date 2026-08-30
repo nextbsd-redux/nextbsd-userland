@@ -65,41 +65,109 @@ typedef enum {
         NSAllDomainsMask        = 0x0ffff,
 } NSSearchPathDomainMask;
 
-/* Apple makes this opaque; we use it as a 1-based step counter. */
+/*
+ * Apple makes this opaque. We use it as a bitmask of remaining steps, so an
+ * empty mask is representable as 0 -- which is what terminates the walk.
+ */
 typedef unsigned int NSSearchPathEnumerationState;
 
-/* Initialize enumeration; return first valid state (1) or 0 if no
- * paths to enumerate. We always return 1 (we have at least
- * /Local/Library to walk). */
+#define NSD_STEP_LOCAL          0x1     /* /Local/Library  */
+#define NSD_STEP_SYSTEM         0x2     /* /System/Library */
+/*
+ * Sentinel meaning "a path was just written, but nothing remains".
+ *
+ * Apple's callers loop as `while ((es = Next(es, path)))`, so the state a
+ * call RETURNS gates whether the path it just wrote gets used. Returning 0
+ * on the final directory would silently discard it. The last real step
+ * therefore returns this, and the following call returns 0 writing nothing.
+ */
+#define NSD_STEP_DONE           0x4
+
+/*
+ * Initialize enumeration.
+ *
+ * The MASK IS LOAD-BEARING and must be honoured. Apple's callers rely on an
+ * empty mask producing an empty enumeration:
+ *
+ *     es = 0;                          // no -D given
+ *     ... getopt sets bits only for -D ...
+ *     es = NSStartSearchPathEnumeration(NSLibraryDirectory, es);
+ *     while ((es = NSGetNextSearchPathEnumeration(es, nspath))) {
+ *             strcat(nspath, "/LaunchDaemons");
+ *             glob(nspath, ...);       // readpath() every plist found
+ *     }
+ *     for (i = 0; i < argc; i++) readpath(argv[i], &lus);
+ *
+ * So for `launchctl unload /path/to/one.plist` with no -D, mask is 0, the
+ * loop body never runs, and only the named file is acted on.
+ *
+ * This stub previously ignored the mask and returned 1 unconditionally, so
+ * the loop ALWAYS ran: every `launchctl load` or `unload` globbed both
+ * LaunchDaemons directories and added EVERY plist on the system to the set.
+ * `launchctl unload <one job>` therefore unloaded everything -- syslogd and
+ * sshd included -- and took the machine down. Reproduced twice on hardware
+ * before the cause was found (#113).
+ *
+ * Domains we can serve, and the step each maps to:
+ *   NSLocalDomainMask  (2) -> /Local/Library
+ *   NSSystemDomainMask (8) -> /System/Library
+ *
+ * NSUserDomainMask and NSNetworkDomainMask are not supported (no per-user
+ * agents, no OD), and are simply absent from the walk rather than silently
+ * substituted.
+ *
+ * The returned state encodes which steps remain, so an empty mask yields 0
+ * and terminates immediately.
+ */
 static inline NSSearchPathEnumerationState
-NSStartSearchPathEnumeration(NSSearchPathDirectory dir __unused,
-    NSSearchPathDomainMask mask __unused)
+NSStartSearchPathEnumeration(NSSearchPathDirectory dir,
+    NSSearchPathDomainMask mask)
 {
-        return 1;
+        NSSearchPathEnumerationState st = 0;
+
+        /* Only NSLibraryDirectory is meaningful here. */
+        if (dir != NSLibraryDirectory && dir != NSAllLibrariesDirectory)
+                return 0;
+
+        if (mask & NSLocalDomainMask)
+                st |= NSD_STEP_LOCAL;
+        if (mask & NSSystemDomainMask)
+                st |= NSD_STEP_SYSTEM;
+
+        return st;
 }
 
-/* Advance enumeration. On entry, state is the step we're producing.
- * Fill 'path' with the corresponding directory; return next step
- * number, or 0 to terminate.
+
+/*
+ * Advance enumeration. `state` is the set of steps still to produce; each bit
+ * is cleared as its path is emitted.
  *
- * Only NSLibraryDirectory is honored. Other directories yield empty
- * enumeration (terminator on first call). */
+ * Callers test the RETURN before using the buffer:
+ *
+ *     while ((es = NSGetNextSearchPathEnumeration(es, path))) { use(path); }
+ *
+ * so the call that writes the final directory must still return non-zero.
+ * NSD_STEP_DONE serves that purpose; the next call returns 0 and writes
+ * nothing.
+ */
 static inline NSSearchPathEnumerationState
 NSGetNextSearchPathEnumeration(NSSearchPathEnumerationState state,
     char path[/* PATH_MAX */])
 {
-        switch (state) {
-        case 1:
+        NSSearchPathEnumerationState rest;
+
+        if (state & NSD_STEP_LOCAL) {
                 strlcpy(path, "/Local/Library", MAXPATHLEN);
-                return 2;
-        case 2:
-                strlcpy(path, "/System/Library", MAXPATHLEN);
-                return 3;
-        case 3:
-        default:
-                /* Terminator: no path written. */
-                return 0;
+                rest = state & ~NSD_STEP_LOCAL;
+                return rest ? rest : NSD_STEP_DONE;
         }
+        if (state & NSD_STEP_SYSTEM) {
+                strlcpy(path, "/System/Library", MAXPATHLEN);
+                rest = state & ~NSD_STEP_SYSTEM;
+                return rest ? rest : NSD_STEP_DONE;
+        }
+        /* NSD_STEP_DONE, or an empty/exhausted state: write nothing. */
+        return 0;
 }
 
 #ifdef __cplusplus
