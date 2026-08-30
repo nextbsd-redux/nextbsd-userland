@@ -2036,5 +2036,26 @@ echo "--- end hostnamed.stderr ---"
 # delayed the IOKit script. Drop them and emit a done-sentinel so boot-test.sh
 # can sequence the IOKit run deterministically (pull model) rather than racing
 # this script's tail.
+# ---------------------------------------------------------------- wedges --
+# Prove each Mach service actually ANSWERS, rather than merely existing.
+#
+# This is the check nothing else in the suite performs. A wedged daemon has
+# not crashed -- it sits idle in ipc_mqueue_receive waiting for a request that
+# never lands in its queue -- so `launchctl list` reports status 0 for it
+# indefinitely while every client blocks forever. On 2026-08-30 the box showed
+# 13 jobs all at status 0 with syslog completely dead (#78).
+#
+# Every probe is bounded, because an unbounded probe against a wedged service
+# hangs rather than failing, which is how this hid for so long. On failure the
+# script dumps the daemon's kernel stacks, every process blocked in Mach, and
+# the daemon's stderr tail -- the evidence that otherwise takes a day to
+# assemble by hand.
+echo "==> Mach service wedge check"
+if [ -x /usr/tests/freebsd-launchd-mach/wedge-check.sh ]; then
+    /usr/tests/freebsd-launchd-mach/wedge-check.sh 15 || true
+else
+    echo "WEDGE-CHECK-FAIL: wedge-check.sh not installed"
+fi
+
 echo "LAUNCHD-MACH-RUN-DONE"
 exit 0
