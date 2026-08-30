@@ -130,7 +130,7 @@ extern void database_server();
 void _phasej_sig(int sig);
 void _phasej_sig(int sig)
 {
-	FILE *f = fopen("/tmp/syslogd_sig.log", "a");
+	FILE *f = _syslogd_trace_open("/tmp/syslogd_sig.log");
 	if (f) {
 		fprintf(f, "[%d] caught signal %d\n", getpid(), sig);
 		void *bt[64];
@@ -151,8 +151,22 @@ void _phasej_sig(int sig)
 void _phasej_exit(void);
 void _phasej_exit(void)
 {
-	FILE *f = fopen("/tmp/syslogd_sig.log", "a");
+	FILE *f = _syslogd_trace_open("/tmp/syslogd_sig.log");
 	if (f) { fprintf(f, "[%d] atexit handler — exit() called\n", getpid()); fclose(f); }
+}
+
+/*
+ * Startup breadcrumbs. Debug aid only -- off unless SYSLOGD_TRACE_STARTUP is
+ * set, so release packages emit nothing.
+ */
+static inline int
+_pj_trace_on(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = (getenv("SYSLOGD_TRACE_STARTUP") != NULL);
+	return enabled;
 }
 
 static void
@@ -324,7 +338,7 @@ launch_config()
 
 	/* Phase J runtime debug. */
 #define _PJ_LC(tag) do { \
-	FILE *_pjf = fopen("/tmp/launch_config.log", "a"); \
+	FILE *_pjf = _syslogd_trace_open("/tmp/launch_config.log"); \
 	if (_pjf) { fprintf(_pjf, "[%d] " tag "\n", getpid()); fclose(_pjf); } \
 } while(0)
 
@@ -530,19 +544,6 @@ main(int argc, const char *argv[])
 	 * reliably at /var/log/syslogd.stderr; /tmp is unreliable — a
 	 * fresh fs is mounted over it mid-boot). Defined up-front so the
 	 * pre-init_globals path is traced too. */
-/*
- * Startup breadcrumbs. Debug aid only -- off unless SYSLOGD_TRACE_STARTUP is
- * set, so release packages emit nothing.
- */
-static inline int
-_pj_trace_on(void)
-{
-	static int enabled = -1;
-
-	if (enabled < 0)
-		enabled = (getenv("SYSLOGD_TRACE_STARTUP") != NULL);
-	return enabled;
-}
 #define _PJ_BC(tag) do { if (_pj_trace_on()) \
 	fprintf(stderr, "[%d] PJ: " tag "\n", getpid()); } while (0)
 

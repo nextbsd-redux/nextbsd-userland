@@ -880,7 +880,7 @@ _text_file_close(asl_out_rule_t *r)
 }
 
 /* Phase J runtime debug: append a breadcrumb to /tmp/asl_route.log. */
-#define _ARL(...) do { FILE *_d = fopen("/tmp/asl_route.log", "a"); \
+#define _ARL(...) do { FILE *_d = _syslogd_trace_open("/tmp/asl_route.log"); \
 	if (_d) { fprintf(_d, "[%d] ", getpid()); fprintf(_d, __VA_ARGS__); \
 	fprintf(_d, "\n"); fclose(_d); } } while (0)
 
@@ -1478,7 +1478,7 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 	{
 		const char *msgval = NULL;
 		int lookup_rc = asl_msg_lookup(msg, ASL_KEY_MSG, &msgval, NULL);
-		{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+		{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 		  if (_d) { fprintf(_d, "[%d] _act_file_final: ASL_KEY_MSG lookup_rc=%d val=%s\n", getpid(), lookup_rc, msgval ? msgval : "(null)"); fclose(_d); } }
 		if (lookup_rc != 0) return;
 		if (msgval == NULL) return;
@@ -1584,17 +1584,17 @@ _act_file(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 {
 	asl_action_file_data_t *f_data;
 
-	{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 	  if (_d) { fprintf(_d, "[%d] _act_file ENTRY m=%p r=%p msg=%p\n", getpid(), (void*)m, (void*)r, (void*)msg); fclose(_d); } }
 
 	if (r == NULL) return;
 	if (msg == NULL) return;
 	if (m == NULL) return;
-	{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 	  if (_d) { fprintf(_d, "[%d]   m->flags=0x%x dst=%p\n", getpid(), m->flags, (void*)r->dst); fclose(_d); } }
 	if ((m->flags & MODULE_FLAG_ENABLED) == 0) return;
 	if (r->dst == NULL) return;
-	{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 	  if (_d) { fprintf(_d, "[%d]   dst->path=%s private=%p flags=0x%x\n", getpid(), r->dst->path ? r->dst->path : "(null)", r->dst->private, r->dst->flags); fclose(_d); } }
 	/* FreeBSD port: post_process_rule should have calloc'd private
 	 * but it's NULL — likely a state-init ordering issue we haven't
@@ -1602,7 +1602,7 @@ _act_file(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 	if (r->dst->private == NULL) {
 		r->dst->private = calloc(1, sizeof(asl_action_file_data_t));
 		if (r->dst->private != NULL) ((asl_action_file_data_t *)(r->dst->private))->fd = -1;
-		{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+		{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 		  if (_d) { fprintf(_d, "[%d]   LAZY-calloc private=%p\n", getpid(), r->dst->private); fclose(_d); } }
 	}
 	if (r->dst->private == NULL) return;
@@ -1628,10 +1628,10 @@ _act_file(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 	}
 #endif
 
-	{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 	  if (_d) { fprintf(_d, "[%d]   calling _act_file_final\n", getpid()); fclose(_d); } }
 	_act_file_final(m, r, msg);
-	{ FILE *_d = fopen("/tmp/asl_route.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/asl_route.log");
 	  if (_d) { fprintf(_d, "[%d]   _act_file_final returned\n", getpid()); fclose(_d); } }
 }
 
@@ -1763,7 +1763,8 @@ asl_out_message(asl_msg_t *msg, int64_t msize)
 	 * but with one inline caller per recv socket that's already the
 	 * case. (Tracked: task #41 — proper libdispatch fix.) */
 	/* Phase J runtime debug: breadcrumb to stderr. */
-#define _AOM(tag) fprintf(stderr, "[%d] aom: " tag "\n", getpid())
+#define _AOM(tag) do { if (getenv("SYSLOGD_TRACE")) \
+	fprintf(stderr, "[%d] aom: " tag "\n", getpid()); } while (0)
 	_AOM("enter");
 	{
 		int ignore = 0;
@@ -2119,11 +2120,11 @@ _asl_action_configure()
 	uint32_t flags = 0;
 
 	/* Phase J runtime debug: trace _asl_action_configure flow. */
-	FILE *_d2 = fopen("/tmp/asl_configure.log", "a");
+	FILE *_d2 = _syslogd_trace_open("/tmp/asl_configure.log");
 	if (_d2) { fprintf(_d2, "[%d] _asl_action_configure ENTRY\n", getpid()); fclose(_d2); }
 
 	if (global.asl_out_module == NULL) global.asl_out_module = asl_out_module_init();
-	_d2 = fopen("/tmp/asl_configure.log", "a");
+	_d2 = _syslogd_trace_open("/tmp/asl_configure.log");
 	if (_d2) { fprintf(_d2, "[%d] asl_out_module_init returned %p\n", getpid(), (void*)global.asl_out_module); fclose(_d2); }
 	if (global.asl_out_module == NULL) return;
 
@@ -2133,14 +2134,14 @@ _asl_action_configure()
 
 	for (m = global.asl_out_module; m != NULL; m = m->next)
 	{
-		_d2 = fopen("/tmp/asl_configure.log", "a");
+		_d2 = _syslogd_trace_open("/tmp/asl_configure.log");
 		if (_d2) { fprintf(_d2, "[%d] module %p name=%s ruleset=%p\n", getpid(), (void*)m, m->name ? m->name : "(null)", (void*)m->ruleset); fclose(_d2); }
 		for (r = m->ruleset; r != NULL; r = r->next)
 		{
-			_d2 = fopen("/tmp/asl_configure.log", "a");
+			_d2 = _syslogd_trace_open("/tmp/asl_configure.log");
 			if (_d2) { fprintf(_d2, "[%d]   rule %p action=%d dst=%p\n", getpid(), (void*)r, r->action, (void*)r->dst); fclose(_d2); }
 			_asl_action_post_process_rule(m, r);
-			_d2 = fopen("/tmp/asl_configure.log", "a");
+			_d2 = _syslogd_trace_open("/tmp/asl_configure.log");
 			if (_d2) { fprintf(_d2, "[%d]   <- post_process_rule OK\n", getpid()); fclose(_d2); }
 			if (r->dst != NULL) flags |= (r->dst->flags & (MODULE_FLAG_ROTATE | MODULE_FLAG_CRASHLOG));
 		}
