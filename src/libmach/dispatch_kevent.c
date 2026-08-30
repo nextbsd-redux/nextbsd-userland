@@ -345,16 +345,29 @@ reg_destroy(struct mach_kev_reg *r)
 	if (r->wrap_pset != MACH_PORT_NULL &&
 	    r->wrap_pset != (mach_port_name_t)r->ident) {
 		/*
-		 * Pull the caller's port back out of the set BEFORE releasing
-		 * it. Releasing a set does not un-member its ports, so the
-		 * caller's receive right would otherwise stay a member of a set
-		 * nothing receives on -- after which a direct mach_msg() on
-		 * that port is invalid (MACH_RCV_IN_SET) and anything sent to
-		 * it is never drained. That is the shape dispatch_mig_server()
-		 * uses, so it would strand exactly the daemons that matter.
+		 * Release the set, but do NOT un-member the caller's port first.
+		 *
+		 * An earlier version of this called
+		 *
+		 *	mach_port_move_member(task, r->ident, MACH_PORT_NULL)
+		 *
+		 * here, reasoning that releasing a set does not un-member its
+		 * ports and the caller's receive right would otherwise be
+		 * stranded in a set nothing receives on. Bisected on hardware:
+		 * that call is what breaks event delivery. syslogd came up with
+		 * one thread instead of five, accepted writes and processed
+		 * none of them.
+		 *
+		 * reg_destroy() runs on EV_DELETE -- deregistration -- and
+		 * libdispatch routinely re-registers the same port immediately
+		 * afterwards. Un-membering here pulls the port out from under a
+		 * knote that is still live, so messages have nowhere to be
+		 * delivered. Releasing the set alone is safe: the membership
+		 * goes away with it.
+		 *
+		 * Verified: release-only is healthy (6 threads, ASL round-trip
+		 * works); release + un-member is not.
 		 */
-		(void)mach_port_move_member(mach_task_self(),
-		    (mach_port_name_t)r->ident, MACH_PORT_NULL);
 		reg_release_pset(r->wrap_pset);
 	}
 	free(r);
