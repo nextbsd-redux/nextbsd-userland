@@ -530,7 +530,21 @@ main(int argc, const char *argv[])
 	 * reliably at /var/log/syslogd.stderr; /tmp is unreliable — a
 	 * fresh fs is mounted over it mid-boot). Defined up-front so the
 	 * pre-init_globals path is traced too. */
-#define _PJ_BC(tag) fprintf(stderr, "[%d] PJ: " tag "\n", getpid())
+/*
+ * Startup breadcrumbs. Debug aid only -- off unless SYSLOGD_TRACE_STARTUP is
+ * set, so release packages emit nothing.
+ */
+static inline int
+_pj_trace_on(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = (getenv("SYSLOGD_TRACE_STARTUP") != NULL);
+	return enabled;
+}
+#define _PJ_BC(tag) do { if (_pj_trace_on()) \
+	fprintf(stderr, "[%d] PJ: " tag "\n", getpid()); } while (0)
 
 #if TARGET_OS_SIMULATOR
 	const char *sim_log_dir = getenv("SIMULATOR_LOG_ROOT");

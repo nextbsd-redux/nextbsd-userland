@@ -1664,8 +1664,10 @@ kern_return_t __notify_server_checkin
 	 * (Same self-defeating pattern as #98.) /var/log/notifyd.stderr is
 	 * dumped by the boot diagnostics.
 	 */
-	fprintf(stderr, "notifyd[%d]: CHECKIN from pid %d\n", getpid(), pid);
-	fflush(stderr);
+	if (notifyd_trace_on()) {
+		fprintf(stderr, "notifyd[%d]: CHECKIN from pid %d\n", getpid(), pid);
+		fflush(stderr);
+	}
 	*version = NOTIFY_IPC_VERSION;
 	*server_pid = getpid();
 	*status = NOTIFY_STATUS_OK;
