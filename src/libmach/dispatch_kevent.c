@@ -869,11 +869,18 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 	 * have eventlist budget AFTER backlog drain. If backlog
 	 * already filled the budget AND no changes, skip the syscall.
 	 */
-	if (nsubmit == 0 && (nchanges == 0 || nfailed == nchanges)) {
+	if (nchanges > 0 && nsubmit == 0 && nfailed == nchanges) {
 		/*
-		 * Nothing to submit. Either the caller asked for no changes, or
-		 * every change failed translation -- in which case the failures
-		 * are the result, and the syscall must not run.
+		 * The caller submitted changes and every one failed to
+		 * translate. The failures are the whole result, so the syscall
+		 * must not run.
+		 *
+		 * nchanges > 0 is load-bearing. Without it this also caught the
+		 * ordinary "wait for events" call (nchanges == 0, nsubmit == 0)
+		 * and returned immediately instead of invoking the syscall --
+		 * which silently killed ALL event delivery: syslogd kept its
+		 * dispatch workers idle, accepted writes, and processed
+		 * nothing. Caught on hardware, not in CI.
 		 */
 		filled = emit_failed_changes(eventlist, nevents, filled,
 		    failed_ch, failed_err, nfailed);
