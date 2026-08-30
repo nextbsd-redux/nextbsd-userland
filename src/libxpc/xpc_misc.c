@@ -443,13 +443,30 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 	if ((message = malloc(msg_size)) == NULL)
 		return (ENOMEM);
 
-	if (xpc_pack(xo, message->data, &size) != 0)
-		return errno;
+	if (xpc_pack(xo, message->data, &size) != 0) {
+		err = errno;
+		free(message);
+		return (err);
+	}
 
 	msg_size = _ALIGN(size + sizeof(mach_msg_header_t) + sizeof(size_t) + sizeof(uint64_t));
 	message->header.msgh_size = (mach_msg_size_t)msg_size;
+	/*
+	 * The local-port disposition must be 0 when there is no local port.
+	 *
+	 * This unconditionally set MACH_MSG_TYPE_MAKE_SEND, but a client
+	 * connection never initialises xc_local_port -- only the
+	 * XPC_CONNECTION_MACH_SERVICE_LISTENER path does a bootstrap_check_in.
+	 * So a fire-and-forget send asked the kernel to manufacture a send
+	 * right from MACH_PORT_NULL, which is invalid.
+	 *
+	 * That is the crash referenced in asl_util.c's
+	 * asl_trigger_aslmanager() stub, and it is why the aslmanager trigger
+	 * was disabled (#80). A trigger is exactly a send with no reply port,
+	 * so it hit this every time.
+	 */
 	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
-	    MACH_MSG_TYPE_MAKE_SEND);
+	    local != MACH_PORT_NULL ? MACH_MSG_TYPE_MAKE_SEND : 0);
 	message->header.msgh_remote_port = dst;
 	message->header.msgh_local_port = local;
 	message->id = id;

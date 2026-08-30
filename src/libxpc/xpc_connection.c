@@ -36,7 +36,15 @@
 #define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_int(&conn->xc_last_id, 1))
 
 static void xpc_connection_recv_message();
+/*
+ * How long xpc_connection_send_message_with_reply_sync() waits before giving
+ * up. Generous -- this is a backstop against a reply that will never arrive,
+ * not a latency budget.
+ */
+#define XPC_SYNC_REPLY_TIMEOUT_NSEC (30ull * NSEC_PER_SEC)
+
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
+static kern_return_t xpc_send_checked(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
 
 static inline struct xpc_connection *conn_extract(xpc_connection_t object)
 {
@@ -287,8 +295,45 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 
 	xpc_retain(message);
 	dispatch_async(conn->xc_send_queue, ^{
-		xpc_send(xconn, message, call->xp_id);
+		kern_return_t skr;
+
+		skr = xpc_send_checked(xconn, message, call->xp_id);
 		xpc_release(message);
+
+		/*
+		 * If the send failed, no reply will ever arrive, so the pending
+		 * call must be retired here. Otherwise it sits on xc_pending
+		 * forever and any caller waiting on it never wakes --
+		 * xpc_connection_send_message_with_reply_sync() waits on
+		 * DISPATCH_TIME_FOREVER, so a failed send became a permanent
+		 * hang rather than an error.
+		 *
+		 * That is the hang referenced in asl_util.c's
+		 * asl_trigger_aslmanager() stub: syslogd blocked in
+		 * db_asl_open() before it bound /var/run/log (#80).
+		 *
+		 * Report it the way a real reply would, with an error object,
+		 * so the caller can distinguish "service said no" from
+		 * "could not deliver".
+		 */
+		if (skr != KERN_SUCCESS) {
+			TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
+			/*
+			 * The handler is deliberately NOT invoked here.
+			 *
+			 * Apple would deliver XPC_ERROR_CONNECTION_INVALID, but
+			 * that global -- like _xpc_error_connection_interrupted
+			 * and _xpc_error_termination_imminent -- is declared in
+			 * xpc/connection.h and defined nowhere in this tree, so
+			 * referencing it is an undefined symbol at link. Passing
+			 * NULL instead would crash any handler that calls
+			 * xpc_get_type() on it. Tracked separately.
+			 *
+			 * Retiring the pending call is the part that matters:
+			 * it is what lets the sync waiter below stop waiting.
+			 */
+			free(call);
+		}
 	});
 
 }
@@ -312,7 +357,21 @@ xpc_connection_send_message_with_reply_sync(xpc_connection_t conn,
 		dispatch_semaphore_signal(sem);
 	});
 
-	dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+	/*
+	 * Bounded, not DISPATCH_TIME_FOREVER.
+	 *
+	 * A send to a Mach service that cannot be delivered leaves no reply to
+	 * wait for, and waiting forever turned that into a permanent hang --
+	 * syslogd stuck in db_asl_open() before it bound /var/run/log, which is
+	 * why the aslmanager trigger was stubbed out entirely (#80).
+	 *
+	 * Returning NULL on timeout matches what callers already have to handle
+	 * (this function returns NULL for a bogus connection above), so no
+	 * caller gains a new case. A hang has no legitimate use.
+	 */
+	if (dispatch_semaphore_wait(sem,
+	    dispatch_time(DISPATCH_TIME_NOW, XPC_SYNC_REPLY_TIMEOUT_NSEC)) != 0)
+		return (NULL);
 	return (result);
 }
 
@@ -438,6 +497,20 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 
 	if (kr != KERN_SUCCESS)
 		debugf("send failed, kr=%d", kr);
+}
+
+/*
+ * Same as xpc_send() but returns the status instead of swallowing it, so a
+ * caller with a pending reply can retire it when delivery failed.
+ */
+static kern_return_t
+xpc_send_checked(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
+{
+	struct xpc_connection *conn;
+
+	conn = conn_extract(xconn);
+	return (xpc_pipe_send(message, conn->xc_remote_port,
+	    conn->xc_local_port, id));
 }
 
 static void

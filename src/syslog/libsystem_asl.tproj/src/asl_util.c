@@ -34,6 +34,7 @@
 #include <dispatch/dispatch.h>
 #include <os/assumes.h>
 #include <xpc/xpc.h>
+#include <xpc/connection.h>	/* xpc_connection_* for the aslmanager trigger */
 #include <syslog.h>
 #include <asl_core.h>
 #include <asl_private.h>
@@ -315,17 +316,43 @@ asl_syslog_faciliy_num_to_name(int n)
 int
 asl_trigger_aslmanager(void)
 {
+	xpc_connection_t conn;
+	xpc_object_t msg;
+
 	/*
-	 * FreeBSD port: no-op. Upstream pokes the aslmanager XPC service
-	 * (ASLMANAGER_SERVICE_NAME) to run on-demand /var/log/asl
-	 * rotation. Nothing answers that service on this port, and our
-	 * libxpc handles neither send form against a dead service: the
-	 * blocking xpc_connection_send_message_with_reply_sync() hangs
-	 * syslogd in db_asl_open() before it binds /var/run/log, and the
-	 * async xpc_connection_send_message() crashes it. The trigger is
-	 * advisory — skipping it only defers log rotation — so return
-	 * success without the XPC round-trip. Restore the real call once
-	 * libxpc delivers cleanly to an absent mach service.
+	 * Poke the aslmanager Mach service so launchd demand-launches it and
+	 * the ASL store gets expired. Fire-and-forget: the trigger is advisory,
+	 * and aslmanager does the work on its own schedule once running.
+	 *
+	 * This was a no-op for a long time because libxpc could not send to a
+	 * service that was not already running (#80) -- the blocking form hung
+	 * syslogd in db_asl_open() before it bound /var/run/log, and the async
+	 * form crashed it. Both are fixed:
+	 *
+	 *   - xpc_pipe_send() set MACH_MSG_TYPE_MAKE_SEND on the local port
+	 *     unconditionally, but a client connection has no local port, so
+	 *     every fire-and-forget send asked the kernel to make a send right
+	 *     from MACH_PORT_NULL. That was the crash.
+	 *   - a failed send left its pending call queued forever and the sync
+	 *     waiter used DISPATCH_TIME_FOREVER. That was the hang.
+	 *
+	 * Deliberately the async form: a trigger has no reply.
 	 */
+	conn = xpc_connection_create_mach_service(ASLMANAGER_SERVICE_NAME,
+	    NULL, 0);
+	if (conn == NULL)
+		return -1;
+
+	msg = xpc_dictionary_create(NULL, NULL, 0);
+	if (msg == NULL) {
+		xpc_release(conn);
+		return -1;
+	}
+
+	xpc_connection_resume(conn);
+	xpc_connection_send_message(conn, msg);
+
+	xpc_release(msg);
+	xpc_release(conn);
 	return 0;
 }
