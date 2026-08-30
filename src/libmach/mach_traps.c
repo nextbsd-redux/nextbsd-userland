@@ -236,26 +236,50 @@ mach_port_allocate(mach_port_name_t task, mach_port_right_t right,
     mach_port_name_t *name)
 {
 	static int num = NO_SYSCALL;
+	static int resolved = 0;
 
-	if (num == NO_SYSCALL) {
+	if (!resolved) {
 		num = resolve_syscall("mach_port_allocate");
-		if (num == NO_SYSCALL)
-			return (KERN_RESOURCE_SHORTAGE);
+		resolved = 1;
 	}
-	return ((kern_return_t)syscall(num, task, right, name));
+
+	if (num != NO_SYSCALL) {
+		kern_return_t rv = (kern_return_t)syscall(num, task, right, name);
+
+		/* Apple falls through to MIG on exactly this. */
+		if (rv != MACH_SEND_INVALID_DEST)
+			return (rv);
+	}
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return (_kernelrpc_mach_port_allocate(task, right, name));
+#else
+	return (KERN_RESOURCE_SHORTAGE);
+#endif
 }
 
 kern_return_t
 mach_port_deallocate(mach_port_name_t task, mach_port_name_t name)
 {
 	static int num = NO_SYSCALL;
+	static int resolved = 0;
 
-	if (num == NO_SYSCALL) {
+	if (!resolved) {
 		num = resolve_syscall("mach_port_deallocate");
-		if (num == NO_SYSCALL)
-			return (KERN_RESOURCE_SHORTAGE);
+		resolved = 1;
 	}
-	return ((kern_return_t)syscall(num, task, name));
+
+	if (num != NO_SYSCALL) {
+		kern_return_t rv = (kern_return_t)syscall(num, task, name);
+
+		/* Apple falls through to MIG on exactly this. */
+		if (rv != MACH_SEND_INVALID_DEST)
+			return (rv);
+	}
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return (_kernelrpc_mach_port_deallocate(task, name));
+#else
+	return (KERN_RESOURCE_SHORTAGE);
+#endif
 }
 
 kern_return_t
@@ -263,13 +287,25 @@ mach_port_insert_right(mach_port_name_t task, mach_port_name_t name,
     mach_port_t poly, mach_msg_type_name_t polyPoly)
 {
 	static int num = NO_SYSCALL;
+	static int resolved = 0;
 
-	if (num == NO_SYSCALL) {
+	if (!resolved) {
 		num = resolve_syscall("mach_port_insert_right");
-		if (num == NO_SYSCALL)
-			return (KERN_RESOURCE_SHORTAGE);
+		resolved = 1;
 	}
-	return ((kern_return_t)syscall(num, task, name, poly, polyPoly));
+
+	if (num != NO_SYSCALL) {
+		kern_return_t rv = (kern_return_t)syscall(num, task, name, poly, polyPoly);
+
+		/* Apple falls through to MIG on exactly this. */
+		if (rv != MACH_SEND_INVALID_DEST)
+			return (rv);
+	}
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return (_kernelrpc_mach_port_insert_right(task, name, poly, polyPoly));
+#else
+	return (KERN_RESOURCE_SHORTAGE);
+#endif
 }
 
 /*
@@ -530,13 +566,25 @@ mach_port_move_member(mach_port_name_t task, mach_port_name_t member,
     mach_port_name_t after)
 {
 	static int num = NO_SYSCALL;
+	static int resolved = 0;
 
-	if (num == NO_SYSCALL) {
+	if (!resolved) {
 		num = resolve_syscall("mach_port_move_member");
-		if (num == NO_SYSCALL)
-			return (KERN_RESOURCE_SHORTAGE);
+		resolved = 1;
 	}
-	return ((kern_return_t)syscall(num, task, member, after));
+
+	if (num != NO_SYSCALL) {
+		kern_return_t rv = (kern_return_t)syscall(num, task, member, after);
+
+		/* Apple falls through to MIG on exactly this. */
+		if (rv != MACH_SEND_INVALID_DEST)
+			return (rv);
+	}
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	return (_kernelrpc_mach_port_move_member(task, member, after));
+#else
+	return (KERN_RESOURCE_SHORTAGE);
+#endif
 }
 
 /*
@@ -578,11 +626,46 @@ mach_port_request_notification(mach_port_name_t task,
 	 * that tree. The kernel-side arg struct is therefore
 	 * {name, msgid, sync, notify, notifyPoly, previous}. (nextbsd#347/#353)
 	 */
-	if (num != NO_SYSCALL)
-		return ((kern_return_t)syscall(num, name, msgid, sync,
-		    notify, notifyPoly, previous));
+	if (num != NO_SYSCALL) {
+		kern_return_t rv = (kern_return_t)syscall(num, name, msgid,
+		    sync, notify, notifyPoly, previous);
 
-	/* No kernel trap: boot-safe no-op (launchd requires KERN_SUCCESS). */
+		if (rv != MACH_SEND_INVALID_DEST)
+			return (rv);
+	}
+
+#ifdef LIBMACH_HAVE_MIG_CLIENT
+	/*
+	 * No trap: try the MIG client (#84). Until now this fell straight to
+	 * the no-op below, which is why libdispatch's Mach backend has never
+	 * received a dead-name notification -- an EVFILT_MACHPORT
+	 * registration whose remote dies is never EV_DELETE'd.
+	 */
+	{
+		kern_return_t rv = _kernelrpc_mach_port_request_notification(
+		    task, name, msgid, sync, notify, notifyPoly, previous);
+
+		if (rv == KERN_SUCCESS)
+			return (rv);
+
+		/*
+		 * DELIBERATELY not propagated. launchd wraps this in
+		 * os_assumes_zero inside jobmgr_init (core.c
+		 * launchd_mport_notify_req), so ANY non-success return makes
+		 * PID 1 abort and the kernel panics with "Going nowhere
+		 * without my init!". Returning the real error here would
+		 * trade a missing notification for an unbootable machine.
+		 *
+		 * So a failing server still gets the old boot-safe answer,
+		 * but a WORKING one is now actually used -- which is the part
+		 * that was missing. Propagating the error is the right end
+		 * state and needs the launchd call site softened first;
+		 * that is not this change.
+		 */
+	}
+#endif
+
+	/* No trap and no working MIG server: boot-safe no-op. */
 	(void)task; (void)name; (void)msgid; (void)sync;
 	(void)notify; (void)notifyPoly;
 	if (previous != NULL)
