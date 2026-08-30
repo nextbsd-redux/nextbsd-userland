@@ -1684,9 +1684,15 @@ _asl_out_process_message(asl_out_module_t *m, asl_msg_t *msg)
 	asl_out_rule_t *r;
 	int _rn = 0;
 
-	/* Phase J runtime debug: breadcrumb to stderr. */
-#define _AOP(...) do { fprintf(stderr, "[%d] aop: ", getpid()); \
-	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+	/* Phase J runtime debug: breadcrumb to stderr, off unless SYSLOGD_TRACE
+	 * is set. syslogd's stderr is redirected to /var/log/syslogd.stderr by
+	 * its plist, so leaving these ungated shipped them to disk on every
+	 * message processed -- 1.7 MB in an 82-second boot, measured on the
+	 * arm64 box. Same gate as _syslogd_trace_open(), so one env var
+	 * controls every breadcrumb in the daemon. */
+#define _AOP(...) do { if (_syslogd_trace_on()) { \
+	fprintf(stderr, "[%d] aop: ", getpid()); \
+	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while (0)
 	_AOP("enter m=%p msg=%p", (void *)m, (void *)msg);
 
 	if (m == NULL) { _AOP("m == NULL, return"); return 1; }
@@ -1763,7 +1769,7 @@ asl_out_message(asl_msg_t *msg, int64_t msize)
 	 * but with one inline caller per recv socket that's already the
 	 * case. (Tracked: task #41 — proper libdispatch fix.) */
 	/* Phase J runtime debug: breadcrumb to stderr. */
-#define _AOM(tag) do { if (getenv("SYSLOGD_TRACE")) \
+#define _AOM(tag) do { if (_syslogd_trace_on()) \
 	fprintf(stderr, "[%d] aom: " tag "\n", getpid()); } while (0)
 	_AOM("enter");
 	{

@@ -115,13 +115,27 @@ static int kern_notify_token[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
 FILE *
 _syslogd_trace_open(const char *path)
 {
+	if (_syslogd_trace_on() == 0)
+		return NULL;
+	return fopen(path, "a");
+}
+
+/*
+ * Same gate, for breadcrumbs that go to stderr rather than to a file of
+ * their own. syslogd's stderr is redirected to /var/log/syslogd.stderr by
+ * its plist, so an ungated fprintf there ships to disk exactly like an
+ * ungated trace file does -- it is just less obvious, which is why the
+ * asl_action.c breadcrumbs were missed the first time round and wrote
+ * 1.7 MB in an 82-second boot on the arm64 box.
+ */
+int
+_syslogd_trace_on(void)
+{
 	static int enabled = -1;
 
 	if (enabled < 0)
 		enabled = (getenv("SYSLOGD_TRACE") != NULL);
-	if (enabled == 0)
-		return NULL;
-	return fopen(path, "a");
+	return enabled;
 }
 static stats_table_t *
 stats_table_new()

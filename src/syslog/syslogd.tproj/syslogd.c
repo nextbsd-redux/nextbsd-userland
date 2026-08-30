@@ -461,7 +461,22 @@ write_boot_log(int first)
 	char buf[256];
 	struct utmpx utx;
 
-	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps. */
+	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps.
+	 *
+	 * DELIBERATELY NOT GATED, unlike the other breadcrumbs in this daemon.
+	 * The lost-wakeup probe in the on-image test suite decides between its
+	 * two verdicts by grepping /var/log/syslogd.stderr for
+	 * "wbl: after process_message" (run.sh, SYSLOG-LOSTWAKEUP-CONFIRMED vs
+	 * -NO). Gating this would not silence a diagnostic so much as silently
+	 * change its answer -- every run would report -NO -- and that probe is
+	 * currently one of the few working signals on #78.
+	 *
+	 * The volume argument that applies to _AOP/_DBSM does not apply here:
+	 * write_boot_log() runs once per boot and emits a handful of lines,
+	 * against the 1.7 MB per boot the message-path breadcrumbs produced.
+	 *
+	 * Gate this only together with teaching the probe to enable
+	 * SYSLOGD_TRACE for itself. */
 #define _WBL(tag) fprintf(stderr, "[%d] wbl: " tag "\n", getpid())
 
 	_WBL("enter");

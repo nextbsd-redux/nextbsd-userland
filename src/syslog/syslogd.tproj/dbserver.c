@@ -476,10 +476,13 @@ db_save_message(asl_msg_t *msg)
 	static dispatch_source_t timer_src;
 	static dispatch_once_t once;
 
-	/* Phase J runtime debug: breadcrumb db_save_message sub-steps. */
-#define _DBSM(...) do { \
+	/* Phase J runtime debug: breadcrumb db_save_message sub-steps, off
+	 * unless SYSLOGD_TRACE is set. This runs once per saved message and
+	 * syslogd's stderr lands in /var/log/syslogd.stderr, so ungated it
+	 * writes to disk for every message the system logs. */
+#define _DBSM(...) do { if (_syslogd_trace_on()) { \
 	fprintf(stderr, "[%d] dbsm: ", getpid()); \
-	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); \
+	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } \
 } while(0)
 
 	_DBSM("enter");
