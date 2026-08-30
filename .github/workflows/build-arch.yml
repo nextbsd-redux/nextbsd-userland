@@ -221,13 +221,36 @@ jobs:
       # boot_soft (arm64's first bring-up) makes a failure non-gating: the log
       # is still captured below, but the lane stays green while we shake it out.
       - name: Boot test (native-assembled image, Darwin+Mach gate)
+        id: boot
         continue-on-error: ${{ inputs.boot_soft }}
         env:
           ARCH: ${{ inputs.arch }}
           BOOT_GATE: ${{ inputs.boot_gate }}
         run: |
           chmod +x tests/boot-test.sh
+          set +e
           ./tests/boot-test.sh disk.img
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
+      # A boot that never completes is not the same as an assertion that fails,
+      # and boot_soft must not report it as success. boot-test.sh exits 2 for
+      # the two "never got there" timeouts (no banner, no login prompt); every
+      # other failure keeps exit 1 and stays soft.
+      #
+      # This is not the gate #87 asks for -- marker failures are still hidden.
+      # It closes the one hole where a hang is indistinguishable from a clean
+      # boot in the reported status. #117 hung for 8 minutes on both arches and
+      # `gh pr checks` said `pass`; the only clue was the job taking 10m2s
+      # instead of 1m37s.
+      - name: Fail on a boot hang, even when boot_soft
+        if: always() && steps.boot.outputs.rc == '2'
+        run: |
+          echo "BOOT-GATE-FAIL: the VM never reached a login banner or prompt."
+          echo "  boot-test.sh exited 2 (hang/timeout), which gates regardless"
+          echo "  of boot_soft. See the uploaded boot log for the last console"
+          echo "  output before it went quiet."
+          exit 1
       - name: Upload boot log
         if: always()
         uses: actions/upload-artifact@v4

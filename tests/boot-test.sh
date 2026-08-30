@@ -312,10 +312,14 @@ loader_boot
 # Proper fix needs either launchd job ordering (no native mechanism)
 # or a getty patch to defer banner until kern.hostname stabilizes —
 # both out of scope for the PAM port.
+# Exit 2, not 1, for the two "never got there" timeouts below. A boot that
+# never completes is categorically different from an assertion that fails, and
+# boot_soft must not hide it -- see #87. The workflow gates on 2 regardless of
+# boot_soft, while ordinary marker failures (exit 1) stay soft.
 expect {
     timeout {
         puts "\nFAIL: boot banner not seen within 8 minutes"
-        exit 1
+        exit 2
     }
     -re "\[A-Za-z\]*BSD/\[A-Za-z0-9_\]+ \\(Amnesiac\\) \\(console\\)" {
         puts "\nWARN: BOOT-BANNER — first-boot banner shows 'Amnesiac' (getty/hostnamed race; cosmetic only)"
@@ -331,7 +335,7 @@ expect {
 expect {
     timeout {
         puts "\nFAIL: 'login:' prompt not seen within 8 minutes"
-        exit 1
+        exit 2
     }
     "login:" { puts "\nOK: boot reached the login prompt" }
 }
