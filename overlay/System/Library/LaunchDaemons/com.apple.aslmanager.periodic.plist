@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	    Periodic ASL store rotation.
+
+	    NOT an Apple plist. Apple has no such job: there, syslogd pokes the
+	    com.apple.aslmanager XPC service, launchd demand-launches aslmanager,
+	    and it rotates on request.
+
+	    That path is dead in this port. asl_trigger_aslmanager() is a no-op
+	    because libxpc cannot send to a Mach service that is not running yet
+	    (see #80), so nothing ever launches aslmanager and /var/log/asl grows
+	    without bound — nothing expires it, and only the daily filename roll
+	    happens (which syslogd does itself).
+
+	    -cli forces the one-shot rotation path. Without it a launchd-started
+	    aslmanager reports is_managed = 1 and sits in an XPC listener waiting
+	    for messages that never arrive.
+
+	    DELETE THIS JOB once libxpc can deliver to a demand-launched Mach
+	    service. The XPC trigger is the correct mechanism; this is a stopgap
+	    so the store does not grow unbounded in the meantime.
+	-->
+	<key>Label</key>
+	<string>com.apple.aslmanager.periodic</string>
+	<key>Program</key>
+	<string>/usr/sbin/aslmanager</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>aslmanager</string>
+		<string>-cli</string>
+	</array>
+	<!-- Hourly. Apple's trigger is event-driven; this is time-driven only
+	     because we have no working trigger. -->
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>LimitLoadToSessionType</key>
+	<string>System</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/aslmanager.stderr</string>
+</dict>
+</plist>

@@ -3536,6 +3536,26 @@ job_export_all2(jobmgr_t jm, launch_data_t where)
 	LIST_FOREACH(ji, &jm->jobs, sle) {
 		launch_data_t tmp;
 
+		/*
+		 * Anonymous jobs are launchd's bookkeeping for processes it did
+		 * not spawn from a plist (a forked shell, an sshd session,
+		 * launchctl itself). They are tracked internally but are not
+		 * jobs in the sense `launchctl list` reports, and Apple does not
+		 * export them -- a real Mac lists only labelled jobs.
+		 *
+		 * Without this filter the listing was polluted with entries like
+		 *
+		 *     0x721a50a22200.anonymous.launchctl
+		 *     0x721a50a21900.anonymous.sshd-session
+		 *     0x721a50a21300.anonymous.sh
+		 *
+		 * i.e. the very command doing the listing showed up in its own
+		 * output, and the set changed on every invocation.
+		 */
+		if (ji->anonymous) {
+			continue;
+		}
+
 		if (jobmgr_assumes(jm, (tmp = job_export(ji)) != NULL)) {
 			launch_data_dict_insert(where, tmp, ji->label);
 		}
