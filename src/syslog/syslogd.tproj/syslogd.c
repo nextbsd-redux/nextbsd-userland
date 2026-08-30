@@ -876,6 +876,19 @@ main(int argc, const char *argv[])
 	_PJ_BC("before dispatch_resume work_queue");
 	dispatch_resume(global.work_queue);
 
+	/*
+	 * Hostname-change notification registration (#78).
+	 *
+	 * This is a synchronous, untimed MIG RPC to notifyd. It used to run
+	 * from whatsmyhostname() during write_boot_log(), i.e. BEFORE
+	 * database_server() was dispatched -- so when the RPC went unanswered
+	 * syslogd never started serving and every client on the machine
+	 * blocked forever. Doing it here, after the service is up and on the
+	 * work queue rather than the main thread, means an unanswered reply
+	 * costs a gethostname() per message instead of all system logging.
+	 */
+	dispatch_async(global.work_queue, ^{ syslogd_register_hostname_notify(); });
+
 	/* FreeBSD port (Phase J runtime): without database_server's
 	 * parked Mach receive thread, our libdispatch's dispatch_main
 	 * appears to exit when no sources keep it alive. Park on

@@ -321,29 +321,36 @@ whatsmyhostname()
 	if (global.hostname != NULL) return global.hostname;
 
 	/*
-	 * #91 second bug. syslogd blocks in ipc_mqueue_receive inside
-	 * write_boot_log() -> process_message() -> aslmsg_verify(), and the
-	 * only Mach RPCs in that path are the two notify calls below. Both
-	 * are synchronous MIG routines that wait for a reply from notifyd,
-	 * and notify_register_check sits inside a dispatch_once -- so if it
-	 * blocks it blocks FOREVER and takes every later caller with it.
+	 * The hostname-change registration USED to happen here, inside this
+	 * dispatch_once. It does not any more, and that is #78.
 	 *
-	 * Trace both so the next boot names which one, instead of inferring
-	 * it. Note notifyd does answer other clients in the same boot
-	 * (notifypoke's checkin succeeds), so this is one unanswered request
-	 * rather than a dead server -- most likely an ordering problem, this
-	 * running before notifyd's dispatch channel is serving.
+	 * notify_register_check() is a synchronous, untimed MIG RPC to
+	 * notifyd. This function is reached from write_boot_log() ->
+	 * process_message() -> aslmsg_verify(), which runs BEFORE main()
+	 * dispatches database_server(). So an RPC that never got a reply
+	 * blocked syslogd's startup permanently, database_server() was never
+	 * dispatched, nothing ever received on the ASL service port, and
+	 * every syslog client on the machine then blocked forever in
+	 * ipc_mqueue_receive waiting for a reply from a server that had not
+	 * started listening. One unanswered optional RPC took out all system
+	 * logging, and `launchctl list` showed syslogd status 0 throughout,
+	 * because it had not crashed -- it had never finished starting.
+	 *
+	 * The registration is only a cache-invalidation hint: it tells us
+	 * when to stop trusting `myname`. The code below already handles not
+	 * having it -- name_change_token starts at -1 and every use is
+	 * guarded -- in which case we simply call gethostname() each time.
+	 * That is a lost optimisation, not a lost function.
+	 *
+	 * So it now happens once, from main(), after the service is up. See
+	 * syslogd_register_hostname_notify(). If notifyd never answers, the
+	 * cost is a gethostname() per message instead of a dead machine.
+	 *
+	 * This does NOT explain why the RPC goes unanswered; that is still
+	 * open. It removes the coupling that turned it into a total outage.
 	 */
-	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
-	  if (_h) { fprintf(_h, "[%d] wmh: enter (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
-
 	dispatch_once(&once, ^{
-		FILE *_o = _syslogd_trace_open("/tmp/process_msg.log");
-		if (_o) { fprintf(_o, "[%d] wmh: before notify_register_check\n", getpid()); fclose(_o); }
 		snprintf(myname, sizeof(myname), "%s", "localhost");
-		notify_register_check(kNotifySCHostNameChange, &name_change_token);
-		_o = _syslogd_trace_open("/tmp/process_msg.log");
-		if (_o) { fprintf(_o, "[%d] wmh: after notify_register_check token=%d\n", getpid(), name_change_token); fclose(_o); }
 	});
 
 	check = 1;
@@ -371,6 +378,24 @@ whatsmyhostname()
 	}
 
 	return (const char *)myname;
+}
+
+/*
+ * Register for hostname-change notifications, off the boot-critical path.
+ *
+ * Called once from main() after database_server() has been dispatched, so a
+ * notify RPC that never returns can no longer stop syslogd from serving. See
+ * the comment in whatsmyhostname() for why this moved (#78).
+ */
+void
+syslogd_register_hostname_notify(void)
+{
+	int tok = -1;
+
+	if (name_change_token >= 0) return;
+
+	if (notify_register_check(kNotifySCHostNameChange, &tok) == NOTIFY_STATUS_OK)
+		name_change_token = tok;
 }
 
 void

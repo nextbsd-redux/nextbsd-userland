@@ -218,5 +218,6 @@ uint32_t notify_register_plain(const char *name, int *out_token);
  */
 extern FILE *_syslogd_trace_open(const char *path);
 extern int _syslogd_trace_on(void);
+extern void syslogd_register_hostname_notify(void);
 
 #endif /* __DAEMON_H__ */
