@@ -693,20 +693,6 @@ qos_to_kev(const struct kevent_qos_s *in, struct kevent *out)
 #define KEVENT_STACK_SLOTS 16
 
 /*
- * Drain previously-queued backlog into the eventlist, up to `nevents`
- * slots for this kq. Returns the number of slots filled.
- *
- * Called BEFORE __sys_kevent so a burst that arrived between
- * kevent_qos calls still drains in subsequent calls without
- * requiring a fresh pipe-bell wake.
- */
-static int
-drain_backlog_to_eventlist(int kq, struct kevent_qos_s *eventlist,
-    int nevents)
-{
-	struct mach_kev_reg *r;
-	int filled = 0;
-/*
  * Report per-change failures as EV_ERROR events, the way a real kevent() does.
  *
  * libdispatch's KEVENT_FLAG_ERROR_EVENTS path inspects nothing else: it scans
@@ -733,6 +719,20 @@ emit_failed_changes(struct kevent_qos_s *eventlist, int nevents, int filled,
 	return (filled);
 }
 
+/*
+ * Drain previously-queued backlog into the eventlist, up to `nevents`
+ * slots for this kq. Returns the number of slots filled.
+ *
+ * Called BEFORE __sys_kevent so a burst that arrived between
+ * kevent_qos calls still drains in subsequent calls without
+ * requiring a fresh pipe-bell wake.
+ */
+static int
+drain_backlog_to_eventlist(int kq, struct kevent_qos_s *eventlist,
+    int nevents)
+{
+	struct mach_kev_reg *r;
+	int filled = 0;
 
 	pthread_mutex_lock(&g_reg_mtx);
 	for (r = g_reg_head; r != NULL && filled < nevents; r = r->next) {
