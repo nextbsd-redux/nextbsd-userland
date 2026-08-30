@@ -78,9 +78,28 @@ kern_return_t mach_port_insert_right(mach_port_name_t task,
 typedef integer_t	*mach_port_info_t;
 typedef int		mach_port_flavor_t;
 
-#define MACH_PORT_LIMITS_INFO		1
-#define MACH_PORT_RECEIVE_STATUS	2
-#define MACH_PORT_DNREQUESTS_SIZE	3
+#define MACH_PORT_LIMITS_INFO		1	/* mach_port_limits_t */
+#define MACH_PORT_RECEIVE_STATUS	2	/* mach_port_status_t */
+#define MACH_PORT_DNREQUESTS_SIZE	3	/* int */
+/*
+ * These must match sys/sys/mach/port.h in nextbsd-kernel exactly; the kernel
+ * switches on the value in mach_port_set_attributes().
+ *
+ * TEMPOWNER was previously defined further down this header as 0x01, labelled
+ * "mach_port_construct() option bits". It is not a construct option -- launchd
+ * passes it as a set_attributes FLAVOR (core.c:1992, :6828, :7692), and 0x01 is
+ * MACH_PORT_LIMITS_INFO. So all three of launchd's tempowner requests were
+ * dispatched to the limits flavor, failed its count check with
+ * infoCnt = 0, and returned KERN_FAILURE: ip_tempowner was never set and
+ * receive-right ownership was never transferred on job death.
+ *
+ * This was inert while mach_port_set_attributes fabricated KERN_SUCCESS.
+ * Making the RPC real (#83) turned a silent no-op into a silent wrong
+ * dispatch, which is why nothing flagged it at the time.
+ */
+#define MACH_PORT_TEMPOWNER		4	/* receive right will be reassigned */
+#define MACH_PORT_IMPORTANCE_RECEIVER	5	/* accepts priority donation */
+#define MACH_PORT_INFO_EXT		7	/* mach_port_info_ext_t */
 
 /*
  * Port-vocabulary typedefs that live in <mach/port.h> on Apple, but
@@ -143,13 +162,6 @@ typedef struct mach_port_status	mach_port_status_t;
 #define MACH_PORT_LIMITS_INFO_COUNT \
 	((mach_msg_type_number_t)(sizeof(mach_port_limits_t) / sizeof(integer_t)))
 
-/*
- * mach_port_construct() option bits. MACH_PORT_TEMPOWNER is the only
- * one launchd-842 references — it asks the kernel to transfer
- * receive-right ownership on the next send, used for one-shot reply
- * ports handed across task boundaries.
- */
-#define MACH_PORT_TEMPOWNER	0x01
 
 kern_return_t mach_port_set_attributes(mach_port_name_t task,
     mach_port_name_t name, mach_port_flavor_t flavor,

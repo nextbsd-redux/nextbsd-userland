@@ -1203,9 +1203,81 @@ kern_return_t
 mach_port_construct(mach_port_name_t task, mach_port_options_t *opts,
     mach_port_context_t guard, mach_port_name_t *name)
 {
-	(void)opts;
-	(void)guard;
-	return mach_port_allocate(task, MACH_PORT_RIGHT_RECEIVE, name);
+	kern_return_t kr;
+
+	kr = mach_port_allocate(task, MACH_PORT_RIGHT_RECEIVE, name);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	if (opts == NULL)
+		return KERN_SUCCESS;
+
+	/*
+	 * Apply the options instead of discarding them.
+	 *
+	 * This used to be `(void)opts; (void)guard;`, which silently dropped
+	 * everything callers asked for. The kernel implements the pieces that
+	 * matter, so nothing here needs kernel work:
+	 *
+	 *   MPO_QLIMIT           -> mach_port_set_attributes(LIMITS_INFO)
+	 *                           ipc_port_set_qlimit(), mach_port.c
+	 *   MPO_CONTEXT_AS_GUARD -> mach_port_set_context()
+	 *                           sets ip_context, mach_port.c
+	 *   MPO_TEMPOWNER        -> mach_port_set_attributes(TEMPOWNER)
+	 *   MPO_INSERT_SEND_RIGHT-> mach_port_insert_right(MAKE_SEND)
+	 *
+	 * The qlimit one was doing real damage: the kernel default is
+	 * MACH_PORT_QLIMIT_BASIC (5), so notifyd's per-client common ports ran
+	 * 5 deep while asking for 16 (notify_proc.c). Whether that bites
+	 * depends on how fast the client drains -- i.e. it produces
+	 * load-dependent, intermittent failures rather than a clean one.
+	 *
+	 * Failures are reported, not swallowed: a caller that asked for a
+	 * guard and did not get one must not believe the port is guarded.
+	 * The port is destroyed first so we do not leak a half-configured one.
+	 */
+	if (opts->flags & MPO_QLIMIT) {
+		mach_port_limits_t limits;
+
+		limits.mpl_qlimit = opts->mpl.mpl_qlimit;
+		kr = mach_port_set_attributes(task, *name, MACH_PORT_LIMITS_INFO,
+		    (mach_port_info_t)&limits, MACH_PORT_LIMITS_INFO_COUNT);
+		if (kr != KERN_SUCCESS)
+			goto fail;
+	}
+
+	if (opts->flags & MPO_TEMPOWNER) {
+		kr = mach_port_set_attributes(task, *name, MACH_PORT_TEMPOWNER,
+		    NULL, 0);
+		if (kr != KERN_SUCCESS)
+			goto fail;
+	}
+
+	if (opts->flags & MPO_CONTEXT_AS_GUARD) {
+		kr = mach_port_set_context(task, *name, guard);
+		if (kr != KERN_SUCCESS)
+			goto fail;
+	}
+
+	if (opts->flags & MPO_INSERT_SEND_RIGHT) {
+		kr = mach_port_insert_right(task, *name, *name,
+		    MACH_MSG_TYPE_MAKE_SEND);
+		if (kr != KERN_SUCCESS)
+			goto fail;
+	}
+
+	/*
+	 * MPO_STRICT / MPO_IMPORTANCE_RECEIVER / MPO_DENAP_RECEIVER /
+	 * MPO_IMMOVABLE_RECEIVE / MPO_FILTER_MSG have no kernel support yet.
+	 * Ignored deliberately -- they harden an already-working port rather
+	 * than change its observable behaviour.
+	 */
+	return KERN_SUCCESS;
+
+fail:
+	(void)mach_port_mod_refs(task, *name, MACH_PORT_RIGHT_RECEIVE, -1);
+	*name = MACH_PORT_NULL;
+	return kr;
 }
 
 /*

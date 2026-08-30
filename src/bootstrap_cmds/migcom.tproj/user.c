@@ -672,7 +672,37 @@ WriteMsgCheckReceive(FILE *file, routine_t *rt, char *success)
  *  which will cause this code to be generated. Called by
  *  WriteRoutine if UseMsgRPC option is false.
  *************************************************************/
-static void
+static /*
+ * Client reply-receive options.
+ *
+ * TYPE(FORMAT_0) alone requests NOTHING: MACH_MSG_TRAILER_FORMAT_0 is 0 and
+ * MACH_RCV_TRAILER_TYPE(x) is (x & 0xf) << 28, so the whole term is literally
+ * zero bits. The kernel only sizes the trailer when
+ *
+ *	option & MACH_RCV_TRAILER_MASK          (0xff << 24)
+ *
+ * is non-zero (mach_msg.c), so every reply came back with msgh_trailer_size at
+ * MACH_MSG_TRAILER_MINIMUM_SIZE (8) -- and the stub then failed its OWN check,
+ *
+ *	trailer_size < sizeof(audit_token_t)    (8 < 32)
+ *
+ * returning MIG_TRAILER_ERROR (-309) for every routine declaring
+ * UserAuditToken. That is job.defs look_up2, i.e. every bootstrap_look_up*
+ * in the system.
+ *
+ * Confirmed on hardware: the kernel assertion added in nextbsd-kernel#135
+ * prints exactly this, for mach_port replies and launchd's subsystems:
+ *
+ *	MIGTRAILER: id=3329 size=44 opt=0x3 type=0 tsize=8 moved=0 complex=0
+ *
+ * opt=0x3 is SEND|RCV with an empty trailer field -- a client stub.
+ *
+ * Apple emits ELEMENTS(MACH_RCV_TRAILER_AV) here. AV and LABELS are not
+ * defined in this tree's <mach/message.h> (tracked separately), so use AUDIT:
+ * the trailer formats are cumulative, so AUDIT (56 bytes) covers seqno,
+ * sender and audit -- every element rtUserImpl can require.
+ */
+void
 WriteMsgSendReceive(FILE *file, routine_t *rt)
 {
   char *SendSize = "";
@@ -700,7 +730,7 @@ WriteMsgSendReceive(FILE *file, routine_t *rt)
   fprintf(file, "\n");
 
   fprintf(file, "\tmsg_result = mach_msg(&Out0P->Head, MACH_RCV_MSG|%s%s%s, 0, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_local_port, %s, MACH_PORT_NULL);\n",
-          rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
+          rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT)|MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
           (rt->rtWaitTime != argNULL && akIdent(rt->rtWaitTime->argKind) == akeWaitTime) ? "MACH_RCV_TIMEOUT|" : "",
           rt->rtMsgOption->argVarName,
           (rt->rtWaitTime != argNULL && akIdent(rt->rtWaitTime->argKind) == akeWaitTime) ? rt->rtWaitTime->argVarName : "MACH_MSG_TIMEOUT_NONE");
@@ -738,7 +768,7 @@ WriteMsgRPC(FILE *file, routine_t *rt)
   }
   if (rt->rtOverwrite) {
     fprintf(file, "\tmsg_result = mach_msg_overwrite(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|MACH_RCV_OVERWRITE|%s%s%s, %s, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL, ",
-            rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
+            rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT)|MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
             rt->rtWaitTime != argNULL ?
 	        (akIdent(rt->rtWaitTime->argKind) == akeWaitTime ? "MACH_SEND_TIMEOUT|MACH_RCV_TIMEOUT|" : "MACH_SEND_TIMEOUT|") : "",
             rt->rtMsgOption->argVarName,
@@ -748,7 +778,7 @@ WriteMsgRPC(FILE *file, routine_t *rt)
   }
   else {
     fprintf(file, "\tmsg_result = mach_msg(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|%s%s%s, %s, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL);\n",
-            rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
+            rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT)|MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
             rt->rtWaitTime != argNULL ?
 	        (akIdent(rt->rtWaitTime->argKind) == akeWaitTime ? "MACH_SEND_TIMEOUT|MACH_RCV_TIMEOUT|" : "MACH_SEND_TIMEOUT|") : "",
             rt->rtMsgOption->argVarName,

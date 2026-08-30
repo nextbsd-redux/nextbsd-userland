@@ -933,7 +933,8 @@ init_launch_config(const char *name)
 	};
 
 	mach_port_set_attributes(mach_task_self(), global.server_port,
-			MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, sizeof(limits));
+			MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits,
+	    MACH_PORT_LIMITS_INFO_COUNT);
 }
 
 static void

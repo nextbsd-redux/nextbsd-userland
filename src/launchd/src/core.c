@@ -1706,7 +1706,8 @@ job_setup_exit_port(job_t j)
 	struct mach_port_limits limits = {
 		.mpl_qlimit = 1,
 	};
-	kr = mach_port_set_attributes(mach_task_self(), j->exit_status_port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, sizeof(limits));
+	kr = mach_port_set_attributes(mach_task_self(), j->exit_status_port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits,
+	    MACH_PORT_LIMITS_INFO_COUNT);
 	(void)job_assumes_zero(j, kr);
 
 	kr = launchd_mport_make_send_once(j->exit_status_port, &j->exit_status_dest);
