@@ -903,7 +903,28 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 			errno = saved_errno;
 		return (filled);
 	}
-	if (nchanges == 0 && filled == nevents) {
+	/*
+	 * Return whatever the backlog gave us rather than sleeping on it.
+	 *
+	 * This used to require filled == nevents, i.e. a COMPLETELY full
+	 * eventlist. With 0 < filled < nevents and nothing to submit, control
+	 * fell through to the blocking __sys_kevent() below -- whose timeout is
+	 * NULL unless KEVENT_FLAG_IMMEDIATE -- and slept indefinitely while
+	 * holding already-received messages in the userland backlog.
+	 *
+	 * Those messages have already been mach_msg()'d out of the wrap port
+	 * set, so the kernel will never signal for them again: ipc_pset_signal()
+	 * fires on ENQUEUE, and the enqueue already happened. The daemon then
+	 * sits healthy and idle in the kernel while the client blocks forever
+	 * waiting for a reply that is sitting in a linked list two frames away.
+	 * That is the wedge in #78, and it needs no lost wakeup in the kernel to
+	 * happen -- we strand the message ourselves.
+	 *
+	 * kevent()'s contract is to return once at least one event is available,
+	 * not once the caller's array is full, so returning here is also simply
+	 * what the syscall is supposed to do.
+	 */
+	if (nchanges == 0 && filled > 0) {
 		if (saved_errno != 0)
 			errno = saved_errno;
 		return (filled);
