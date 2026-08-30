@@ -968,6 +968,45 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 	for (i = 0; i < n && filled < nevents; i++) {
 		struct mach_kev_reg *r = NULL;
 
+		/*
+		 * On a KEVENT_FLAG_ERROR_EVENTS call, emit receipts ONLY --
+		 * never drain a port set. This is the other half of the race
+		 * described above, and it destroys live messages.
+		 *
+		 * libdispatch issues every registration and every EV_DISPATCH
+		 * re-arm through _dispatch_kq_update_one(), which passes
+		 * KEVENT_FLAG_IMMEDIATE | KEVENT_FLAG_ERROR_EVENTS
+		 * (event_kevent.c) and an eventlist of 16 -- it wants receipts
+		 * for the changes it submitted, nothing more. Its own
+		 * EV_RECEIPT emulation is compiled out here because
+		 * DISPATCH_USE_KEVENT_QOS is 1, so honouring "do not dequeue"
+		 * is entirely on this wrapper.
+		 *
+		 * Phase 1 already honours it (see the guard at the drain
+		 * above). Phase 3 did not: a readiness event arriving in the
+		 * same call was drained with mach_msg -- taking the message
+		 * OUT of the port set -- and handed up. libdispatch's
+		 * ERROR_EVENTS loop keeps only entries with EV_ERROR set and
+		 * silently discards the rest, so the message was destroyed,
+		 * its buffer and any ports inside it leaked, and no retry was
+		 * possible: the kernel had already dequeued it, so
+		 * ipc_pset_signal() will never fire for it again.
+		 *
+		 * Two paths make that hot rather than rare. libdispatch sends
+		 * before it registers the reply port (mach.c), so a fast local
+		 * server's reply can be eaten by the very call registering
+		 * interest in it -- client blocked in ipc_mqueue_receive,
+		 * server healthy and idle, which is #78's signature exactly.
+		 * And because every re-arm is also an ERROR_EVENTS call, this
+		 * fires after every delivered message, not just at setup.
+		 *
+		 * Skipping the entry leaves the message queued, so the next
+		 * ordinary poll delivers it.
+		 */
+		if ((flags & KEVENT_FLAG_ERROR_EVENTS) &&
+		    !(scratch_ev[i].flags & EV_ERROR))
+			continue;
+
 		if (scratch_ev[i].filter == EVFILT_MACHPORT_NATIVE) {
 			pthread_mutex_lock(&g_reg_mtx);
 			r = reg_find_by_wrap_pset_locked(
