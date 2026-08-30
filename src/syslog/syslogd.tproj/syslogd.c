@@ -789,6 +789,47 @@ main(int argc, const char *argv[])
 	init_modules();
 	_PJ_BC("after init_modules");
 
+	/*
+	 * Start the Mach service HERE, before the optional notify
+	 * registrations below -- ordering is load-bearing (#78).
+	 *
+	 * Everything between this point and dispatch_main() is optional
+	 * setup, and three of those calls are synchronous, untimed MIG RPCs
+	 * to notifyd (two notify_register_dispatch, one
+	 * notify_register_plain). When one of them gets no reply, startup
+	 * stops there. Dispatching database_server() afterwards meant a hung
+	 * optional registration prevented syslogd from EVER serving, so every
+	 * syslog client on the machine blocked forever on a port nobody was
+	 * receiving.
+	 *
+	 * Measured over 4 boots: syslog round-trips succeeded on exactly the
+	 * boots where startup reached this dispatch (4/5 and 3/5), and
+	 * returned 0/5 on the boots where it stopped at "after init_modules".
+	 * Perfect correlation -- reaching this line is the thing that
+	 * determines whether the machine can log.
+	 *
+	 * init_modules() still runs first: database_server()'s message path
+	 * goes through the module list, so it must be built before messages
+	 * can be processed.
+	 *
+	 * Parks a thread in database_server. In notifyd, we found that the
+	 * overhead of a dispatch source for mach calls was too high,
+	 * especially on iOS.
+	 *
+	 * server_port is MACH_PORT_NULL when launch_config() could not reach
+	 * launchd via MachServices; skip the dispatch then. bsd_in / klog_in
+	 * still ingest cleanly.
+	 */
+	_PJ_BC("about to dispatch database_server");
+	asldebug("starting mach service\n");
+	if (global.server_port != 0) {
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+			database_server();
+		});
+	}
+	_PJ_BC("after dispatch database_server (skipped if no server_port)");
+
+
 #if !TARGET_OS_SIMULATOR
 	asldebug("setting up network change notification handler\n");
 
@@ -851,25 +892,6 @@ main(int argc, const char *argv[])
 		dispatch_resume(global.mark_timer);
 	}
 
-	_PJ_BC("about to dispatch database_server");
-	asldebug("starting mach service\n");
-	/*
-	 * Start mach server
-	 * Parks a thread in database_server.  In notifyd, we found that the overhead of
-	 * a dispatch source for mach calls was too high, especially on iOS.
-	 *
-	 * FreeBSD port (Phase J runtime): database_server uses
-	 * global.server_port which is MACH_PORT_NULL when launch_config
-	 * couldn't reach launchd via MachServices. Skip the dispatch
-	 * to avoid Mach RPC into our incomplete mach.ko port. bsd_in /
-	 * klog_in still ingest cleanly.
-	 */
-	if (global.server_port != 0) {
-		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-			database_server();
-		});
-	}
-	_PJ_BC("after dispatch database_server (skipped if no server_port)");
 
 	/* go to work */
 	asldebug("starting work queue\n");
