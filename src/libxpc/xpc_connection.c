@@ -36,6 +36,12 @@
 #define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_int(&conn->xc_last_id, 1))
 
 static void xpc_connection_recv_message();
+/*
+ * Backstop for a reply that will never arrive. Generous on purpose -- this is
+ * not a latency budget, it is the difference between an error and a hang.
+ */
+#define XPC_SYNC_REPLY_TIMEOUT_NSEC (30ull * NSEC_PER_SEC)
+
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
 
 static inline struct xpc_connection *conn_extract(xpc_connection_t object)
@@ -240,6 +246,34 @@ xpc_connection_resume(xpc_connection_t xconn)
 		conn->xc_recv_source = dispatch_source_create(
 		    DISPATCH_SOURCE_TYPE_MACH_RECV, conn->xc_local_port, 0,
 		    conn->xc_recv_queue);
+
+		/*
+		 * dispatch_source_create() returns NULL on bad input, and this
+		 * dereferenced it unconditionally.
+		 *
+		 * _dispatch_unote_create_with_handle() returns DISPATCH_UNOTE_NULL
+		 * when the handle is 0 (event.c:77), _dispatch_source_create()
+		 * then returns DISPATCH_BAD_INPUT (source.c:48), and
+		 * DISPATCH_BAD_INPUT is ((void *)0) -- plain NULL
+		 * (internal.h:517). So a zero xc_local_port turned into
+		 * dispatch_set_context(NULL, conn) and a SIGSEGV.
+		 *
+		 * That is how syslogd died with status 139 the moment
+		 * asl_trigger_aslmanager() was restored (#80): the trigger is
+		 * the only caller that reaches resume() on a connection whose
+		 * local port has not been established.
+		 *
+		 * Fail the resume instead of crashing the process. The caller
+		 * already has to cope with a connection that never delivers.
+		 */
+		if (conn->xc_recv_source == NULL) {
+			debugf("dispatch_source_create failed: "
+			    "local_port=0x%x remote_port=0x%x name=%s",
+			    conn->xc_local_port, conn->xc_remote_port,
+			    conn->xc_name ? conn->xc_name : "(none)");
+			return;
+		}
+
 		dispatch_set_context(conn->xc_recv_source, conn);
 		dispatch_source_set_event_handler_f(conn->xc_recv_source,
 		    xpc_connection_recv_message);
@@ -312,7 +346,22 @@ xpc_connection_send_message_with_reply_sync(xpc_connection_t conn,
 		dispatch_semaphore_signal(sem);
 	});
 
-	dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+	/*
+	 * Bounded, not DISPATCH_TIME_FOREVER.
+	 *
+	 * A send that cannot be delivered leaves no reply to wait for, and
+	 * xpc_connection_send_message_with_reply() does not retire its pending
+	 * call on failure -- so waiting forever turned an undeliverable message
+	 * into a permanent hang. That is what wedged syslogd in db_asl_open()
+	 * before it bound /var/run/log, and why the aslmanager trigger was
+	 * stubbed out (#80).
+	 *
+	 * NULL on timeout is already a case callers handle: this function
+	 * returns NULL for a bogus connection a few lines up.
+	 */
+	if (dispatch_semaphore_wait(sem,
+	    dispatch_time(DISPATCH_TIME_NOW, XPC_SYNC_REPLY_TIMEOUT_NSEC)) != 0)
+		return (NULL);
 	return (result);
 }
 
