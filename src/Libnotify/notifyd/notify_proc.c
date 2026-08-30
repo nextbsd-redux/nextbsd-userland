@@ -343,6 +343,24 @@ do_mach_notify_send_possible(mach_port_t notify, mach_port_name_t port)
 	port_arm_mach_notifications(port);
 
 	pdata = _nc_table_find_n(&global.notify_state.port_table, port);
+	if (pdata == NULL) {
+		/*
+		 * Guarded because this handler is newly reachable (#78): until
+		 * the Mach notification server was generated, every notification
+		 * was destroyed by a demux mismatch and this code never ran.
+		 * _nc_table_find_n() returns NULL for a port that is no longer
+		 * registered, which is reachable if the port was torn down
+		 * between the send failing and the notification arriving.
+		 *
+		 * Logged rather than ignored: if this fires often it means the
+		 * port_table and the armed notifications have diverged, which is
+		 * a real bug and should not be silent.
+		 */
+		log_message(ASL_LEVEL_NOTICE,
+		    "send_possible for unregistered port %x\n",
+		    (unsigned int)port);
+		return KERN_SUCCESS;
+	}
 	pdata->flags &= ~NOTIFY_PORT_PROC_STATE_SUSPENDED;
 
 	LIST_FOREACH(c, &pdata->clients, client_port_entry) {
@@ -439,6 +457,20 @@ do_mach_notify_dead_name(mach_port_t notify, mach_port_name_t port)
 	client_t *c, *tmp;
 
 	pdata = _nc_table_find_n(&global.notify_state.port_table, port);
+	if (pdata == NULL) {
+		/*
+		 * Same newly-reachable guard as send_possible above (#78). The
+		 * dead-name right MUST still be deallocated on this path --
+		 * receiving the notification allocated it, and returning early
+		 * without the deallocate below would leak a port right per
+		 * notification.
+		 */
+		log_message(ASL_LEVEL_NOTICE,
+		    "dead_name for unregistered port %x\n",
+		    (unsigned int)port);
+		mach_port_deallocate(mach_task_self(), port);
+		return KERN_SUCCESS;
+	}
 	LIST_FOREACH_SAFE(c, &pdata->clients, client_port_entry, tmp) {
 		port_proc_cancel_client(c);
 	}

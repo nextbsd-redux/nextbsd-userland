@@ -29,7 +29,8 @@ MIGOUT?=
 .if !empty(MIGOUT)
 .PATH:		${MIGOUT}
 SRCS+=		notify_ipcServer.c notify_ipcUser.c \
-		notify_old_ipcServer.c notify_old_ipcUser.c
+		notify_old_ipcServer.c notify_old_ipcUser.c \
+		notifyServer.c
 CFLAGS+=	-I${MIGOUT}
 .endif
 
