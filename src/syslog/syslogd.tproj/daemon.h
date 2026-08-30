@@ -202,4 +202,21 @@ void asl_action_out_module_query(asl_msg_t *q, asl_msg_t *m, bool all);
 /* notify SPI */
 uint32_t notify_register_plain(const char *name, int *out_token);
 
+
+/*
+ * Gated open for syslogd's debug traces (#103).
+ *
+ * syslogd carried ~37 unconditional fopen/fprintf/fclose sites writing to
+ * /tmp: bsd_in_recv.log and asl_route.log are on the per-MESSAGE path, so on
+ * a busy system that is a syscall storm plus unbounded files. They were
+ * invaluable while bringing ASL up and should stay available, but they must
+ * not ship enabled.
+ *
+ * Returns NULL unless SYSLOGD_TRACE is set. Every existing call site already
+ * checks the FILE * for NULL, so gating the open disables all of them without
+ * touching the call sites.
+ */
+extern FILE *_syslogd_trace_open(const char *path);
+extern int _syslogd_trace_on(void);
+
 #endif /* __DAEMON_H__ */

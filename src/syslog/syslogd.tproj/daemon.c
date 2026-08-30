@@ -111,6 +111,32 @@ static const char *kern_notify_key[] =
 
 static int kern_notify_token[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
 
+
+FILE *
+_syslogd_trace_open(const char *path)
+{
+	if (_syslogd_trace_on() == 0)
+		return NULL;
+	return fopen(path, "a");
+}
+
+/*
+ * Same gate, for breadcrumbs that go to stderr rather than to a file of
+ * their own. syslogd's stderr is redirected to /var/log/syslogd.stderr by
+ * its plist, so an ungated fprintf there ships to disk exactly like an
+ * ungated trace file does -- it is just less obvious, which is why the
+ * asl_action.c breadcrumbs were missed the first time round and wrote
+ * 1.7 MB in an 82-second boot on the arm64 box.
+ */
+int
+_syslogd_trace_on(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = (getenv("SYSLOGD_TRACE") != NULL);
+	return enabled;
+}
 static stats_table_t *
 stats_table_new()
 {
@@ -284,6 +310,8 @@ stats_msg(const char *sender, time_t now, asl_msg_t *msg)
 	stats_table_update(global.stats, sender, msize);
 }
 
+
+
 static const char *
 whatsmyhostname()
 {
@@ -306,27 +334,27 @@ whatsmyhostname()
 	 * rather than a dead server -- most likely an ordering problem, this
 	 * running before notifyd's dispatch channel is serving.
 	 */
-	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
 	  if (_h) { fprintf(_h, "[%d] wmh: enter (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
 
 	dispatch_once(&once, ^{
-		FILE *_o = fopen("/tmp/process_msg.log", "a");
+		FILE *_o = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_o) { fprintf(_o, "[%d] wmh: before notify_register_check\n", getpid()); fclose(_o); }
 		snprintf(myname, sizeof(myname), "%s", "localhost");
 		notify_register_check(kNotifySCHostNameChange, &name_change_token);
-		_o = fopen("/tmp/process_msg.log", "a");
+		_o = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_o) { fprintf(_o, "[%d] wmh: after notify_register_check token=%d\n", getpid(), name_change_token); fclose(_o); }
 	});
 
 	check = 1;
 	status = 0;
 
-	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
 	  if (_h) { fprintf(_h, "[%d] wmh: before notify_check (token=%d)\n", getpid(), name_change_token); fclose(_h); } }
 
 	if (name_change_token >= 0) status = notify_check(name_change_token, &check);
 
-	{ FILE *_h = fopen("/tmp/process_msg.log", "a");
+	{ FILE *_h = _syslogd_trace_open("/tmp/process_msg.log");
 	  if (_h) { fprintf(_h, "[%d] wmh: after notify_check status=%d check=%d\n", getpid(), status, check); fclose(_h); } }
 
 	if ((status == 0) && (check == 0)) return (const char *)myname;
@@ -700,23 +728,23 @@ init_globals(void)
 	global.stats_interval = DEFAULT_STATS_INTERVAL;
 
 	global.asl_out_module = asl_out_module_init();
-	{ FILE *_pjf = fopen("/tmp/init_globals.log", "a");
+	{ FILE *_pjf = _syslogd_trace_open("/tmp/init_globals.log");
 	  if (_pjf) { fprintf(_pjf, "[%d] post asl_out_module_init = %p\n", getpid(), (void*)global.asl_out_module); fclose(_pjf); } }
 
 	OSSpinLockUnlock(&global.lock);
-	{ FILE *_pjf = fopen("/tmp/init_globals.log", "a");
+	{ FILE *_pjf = _syslogd_trace_open("/tmp/init_globals.log");
 	  if (_pjf) { fprintf(_pjf, "[%d] post OSSpinLockUnlock\n", getpid()); fclose(_pjf); } }
 
 	if (global.asl_out_module != NULL)
 	{
 		for (r = global.asl_out_module->ruleset; r != NULL; r = r->next)
 		{
-			{ FILE *_pjf = fopen("/tmp/init_globals.log", "a");
+			{ FILE *_pjf = _syslogd_trace_open("/tmp/init_globals.log");
 			  if (_pjf) { fprintf(_pjf, "[%d]   rule %p action=%d query=%p options=%p\n", getpid(), (void*)r, r->action, (void*)r->query, (void*)r->options); fclose(_pjf); } }
 			if ((r->action == ACTION_SET_PARAM) && (r->query == NULL) && (r->options != NULL) && (!strncmp(r->options, "debug", 5))) control_set_param(r->options, true);
 		}
 	}
-	{ FILE *_pjf = fopen("/tmp/init_globals.log", "a");
+	{ FILE *_pjf = _syslogd_trace_open("/tmp/init_globals.log");
 	  if (_pjf) { fprintf(_pjf, "[%d] init_globals EXIT\n", getpid()); fclose(_pjf); } }
 }
 
@@ -1006,11 +1034,11 @@ process_message(asl_msg_t *msg, uint32_t source)
 		int32_t kplevel = -1;
 		uint32_t status;
 		uid_t uid = -2;
-		FILE *_d = fopen("/tmp/process_msg.log", "a");
+		FILE *_d = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_d) { fprintf(_d, "[%d] process_message INLINE source=%u\n", getpid(), source); fclose(_d); }
 
 		status = aslmsg_verify(msg, source, &kplevel, &uid);
-		_d = fopen("/tmp/process_msg.log", "a");
+		_d = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_d) { fprintf(_d, "[%d]   aslmsg_verify -> %u\n", getpid(), status); fclose(_d); }
 		if (status == VERIFY_STATUS_OK)
 		{
@@ -1025,7 +1053,7 @@ process_message(asl_msg_t *msg, uint32_t source)
 			}
 			if ((uid == 0) && is_control) control_message(msg);
 			asl_out_message(msg, msize);
-			_d = fopen("/tmp/process_msg.log", "a");
+			_d = _syslogd_trace_open("/tmp/process_msg.log");
 			if (_d) { fprintf(_d, "[%d]   asl_out_message returned\n", getpid()); fclose(_d); }
 		}
 		else

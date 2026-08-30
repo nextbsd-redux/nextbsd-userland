@@ -59,11 +59,11 @@ bsd_in_acceptmsg(int fd)
 	asl_msg_t *m;
 
 	/* Phase J runtime debug: log every dispatch fire, BEFORE recvfrom. */
-	{ FILE *_d0 = fopen("/tmp/bsd_in_recv.log", "a");
+	{ FILE *_d0 = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	  if (_d0) { fprintf(_d0, "[%d] dispatch fired on fd=%d\n", getpid(), fd); fclose(_d0); } }
 
 	len = recvfrom(fd, dline, MAXLINE, 0, (struct sockaddr *)&from, &fromlen);
-	{ FILE *_d0 = fopen("/tmp/bsd_in_recv.log", "a");
+	{ FILE *_d0 = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	  if (_d0) { fprintf(_d0, "[%d]   recvfrom rc=%zd errno=%d\n", getpid(), len, errno); fclose(_d0); } }
 	if (len <= 0) return;
 	dline[len] = '\0';
@@ -75,14 +75,14 @@ bsd_in_acceptmsg(int fd)
 	if (len == 0) return;
 
 	/* Phase J runtime debug. */
-	FILE *_d = fopen("/tmp/bsd_in_recv.log", "a");
+	FILE *_d = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	if (_d) { fprintf(_d, "[%d] recv fd=%d len=%zd: %.120s\n", getpid(), fd, len, dline); fclose(_d); }
 
 	m = asl_input_parse(dline, len, NULL, SOURCE_BSD_SOCK);
-	_d = fopen("/tmp/bsd_in_recv.log", "a");
+	_d = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	if (_d) { fprintf(_d, "[%d]   asl_input_parse -> %p\n", getpid(), (void*)m); fclose(_d); }
 	process_message(m, SOURCE_BSD_SOCK);
-	_d = fopen("/tmp/bsd_in_recv.log", "a");
+	_d = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	if (_d) { fprintf(_d, "[%d]   process_message OK\n", getpid()); fclose(_d); }
 }
 
@@ -146,7 +146,7 @@ bsd_in_recv_loop(void *arg)
 	int idx = ((struct bsd_in_thread_arg *)arg)->idx;
 	free(arg);
 
-	{ FILE *_d = fopen("/tmp/bsd_in_recv.log", "a");
+	{ FILE *_d = _syslogd_trace_open("/tmp/bsd_in_recv.log");
 	  if (_d) { fprintf(_d, "[%d] recv thread RUNNING idx=%d fd=%d\n",
 	    getpid(), idx, sockfd[idx]); fclose(_d); } }
 
@@ -165,7 +165,7 @@ bsd_in_init(void)
 	int i, ok = 0;
 	FILE *dbg;
 
-	dbg = fopen("/tmp/bsd_in_init.log", "a");
+	dbg = _syslogd_trace_open("/tmp/bsd_in_init.log");
 	if (dbg) { fprintf(dbg, "[%d] bsd_in_init: entered\n", getpid()); fclose(dbg); }
 
 	dispatch_once(&once, ^{
@@ -177,7 +177,7 @@ bsd_in_init(void)
 	for (i = 0; i < NSOCK; i++) {
 		if (sockfd[i] >= 0) { ok++; continue; }
 		int rc = bsd_in_open_one(i);
-		dbg = fopen("/tmp/bsd_in_init.log", "a");
+		dbg = _syslogd_trace_open("/tmp/bsd_in_init.log");
 		if (dbg) {
 			fprintf(dbg, "[%d] bsd_in_init: open(%s) rc=%d errno=%d (%s)\n",
 			    getpid(), sock_path[i], rc, errno, strerror(errno));
@@ -196,11 +196,11 @@ bsd_in_init(void)
 			pthread_detach(t);
 		}
 		bsd_in_poll_started = 1;
-		dbg = fopen("/tmp/bsd_in_init.log", "a");
+		dbg = _syslogd_trace_open("/tmp/bsd_in_init.log");
 		if (dbg) { fprintf(dbg, "[%d] bsd_in_init: recv threads launched\n", getpid()); fclose(dbg); }
 	}
 
-	dbg = fopen("/tmp/bsd_in_init.log", "a");
+	dbg = _syslogd_trace_open("/tmp/bsd_in_init.log");
 	if (dbg) { fprintf(dbg, "[%d] bsd_in_init: returning ok=%d\n", getpid(), ok); fclose(dbg); }
 
 	return (ok > 0) ? 0 : -1;

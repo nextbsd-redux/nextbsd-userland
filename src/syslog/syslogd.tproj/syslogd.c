@@ -130,7 +130,7 @@ extern void database_server();
 void _phasej_sig(int sig);
 void _phasej_sig(int sig)
 {
-	FILE *f = fopen("/tmp/syslogd_sig.log", "a");
+	FILE *f = _syslogd_trace_open("/tmp/syslogd_sig.log");
 	if (f) {
 		fprintf(f, "[%d] caught signal %d\n", getpid(), sig);
 		void *bt[64];
@@ -151,8 +151,22 @@ void _phasej_sig(int sig)
 void _phasej_exit(void);
 void _phasej_exit(void)
 {
-	FILE *f = fopen("/tmp/syslogd_sig.log", "a");
+	FILE *f = _syslogd_trace_open("/tmp/syslogd_sig.log");
 	if (f) { fprintf(f, "[%d] atexit handler — exit() called\n", getpid()); fclose(f); }
+}
+
+/*
+ * Startup breadcrumbs. Debug aid only -- off unless SYSLOGD_TRACE_STARTUP is
+ * set, so release packages emit nothing.
+ */
+static inline int
+_pj_trace_on(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = (getenv("SYSLOGD_TRACE_STARTUP") != NULL);
+	return enabled;
 }
 
 static void
@@ -324,7 +338,7 @@ launch_config()
 
 	/* Phase J runtime debug. */
 #define _PJ_LC(tag) do { \
-	FILE *_pjf = fopen("/tmp/launch_config.log", "a"); \
+	FILE *_pjf = _syslogd_trace_open("/tmp/launch_config.log"); \
 	if (_pjf) { fprintf(_pjf, "[%d] " tag "\n", getpid()); fclose(_pjf); } \
 } while(0)
 
@@ -447,7 +461,22 @@ write_boot_log(int first)
 	char buf[256];
 	struct utmpx utx;
 
-	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps. */
+	/* Phase J runtime debug: breadcrumb write_boot_log sub-steps.
+	 *
+	 * DELIBERATELY NOT GATED, unlike the other breadcrumbs in this daemon.
+	 * The lost-wakeup probe in the on-image test suite decides between its
+	 * two verdicts by grepping /var/log/syslogd.stderr for
+	 * "wbl: after process_message" (run.sh, SYSLOG-LOSTWAKEUP-CONFIRMED vs
+	 * -NO). Gating this would not silence a diagnostic so much as silently
+	 * change its answer -- every run would report -NO -- and that probe is
+	 * currently one of the few working signals on #78.
+	 *
+	 * The volume argument that applies to _AOP/_DBSM does not apply here:
+	 * write_boot_log() runs once per boot and emits a handful of lines,
+	 * against the 1.7 MB per boot the message-path breadcrumbs produced.
+	 *
+	 * Gate this only together with teaching the probe to enable
+	 * SYSLOGD_TRACE for itself. */
 #define _WBL(tag) fprintf(stderr, "[%d] wbl: " tag "\n", getpid())
 
 	_WBL("enter");
@@ -530,7 +559,8 @@ main(int argc, const char *argv[])
 	 * reliably at /var/log/syslogd.stderr; /tmp is unreliable — a
 	 * fresh fs is mounted over it mid-boot). Defined up-front so the
 	 * pre-init_globals path is traced too. */
-#define _PJ_BC(tag) fprintf(stderr, "[%d] PJ: " tag "\n", getpid())
+#define _PJ_BC(tag) do { if (_pj_trace_on()) \
+	fprintf(stderr, "[%d] PJ: " tag "\n", getpid()); } while (0)
 
 #if TARGET_OS_SIMULATOR
 	const char *sim_log_dir = getenv("SIMULATOR_LOG_ROOT");

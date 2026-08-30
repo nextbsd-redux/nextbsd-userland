@@ -86,6 +86,23 @@ static const char *asl_out_action_name[] =
 #define forever for(;;)
 #define KEYMATCH(S,K) ((strncasecmp(S, K, strlen(K)) == 0))
 
+
+/*
+ * Gated open for asl_common's parse trace (#103). Local copy rather than
+ * daemon.h's, because aslcommon is shared with aslmanager and util and must
+ * not pull syslogd's private header. Same env var, same semantics.
+ */
+static FILE *
+_asl_trace_open(const char *path)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = (getenv("SYSLOGD_TRACE") != NULL);
+	if (enabled == 0)
+		return NULL;
+	return fopen(path, "a");
+}
 asl_msg_t *
 xpc_object_to_asl_msg(xpc_object_t xobj)
 {
@@ -1930,32 +1947,32 @@ asl_out_rule_t *
 asl_out_module_parse_line(asl_out_module_t *m, char *s)
 {
 	/* Phase J runtime debug: sentinel writes pre/post each branch. */
-	FILE *_dbg = fopen("/tmp/asl_parse.log", "a");
+	FILE *_dbg = _asl_trace_open("/tmp/asl_parse.log");
 	if (_dbg) { fprintf(_dbg, "[%d] parse_line ENTRY: %.80s\n", getpid(), s ? s : "(null)"); fclose(_dbg); }
 
 	while ((*s == ' ') || (*s == '\t')) s++;
 
 	if ((*s == 'Q') || (*s == '?') || (*s == '*'))
 	{
-		_dbg = fopen("/tmp/asl_parse.log", "a");
+		_dbg = _asl_trace_open("/tmp/asl_parse.log");
 		if (_dbg) { fprintf(_dbg, "[%d] -> parse_query_action\n", getpid()); fclose(_dbg); }
 		asl_out_rule_t *qa = _asl_out_module_parse_query_action(m, s);
-		_dbg = fopen("/tmp/asl_parse.log", "a");
+		_dbg = _asl_trace_open("/tmp/asl_parse.log");
 		if (_dbg) { fprintf(_dbg, "[%d] <- parse_query_action OK\n", getpid()); fclose(_dbg); }
 		return qa;
 	}
 	else if (*s == '=')
 	{
-		_dbg = fopen("/tmp/asl_parse.log", "a");
+		_dbg = _asl_trace_open("/tmp/asl_parse.log");
 		if (_dbg) { fprintf(_dbg, "[%d] -> parse_set_param\n", getpid()); fclose(_dbg); }
 		return _asl_out_module_parse_set_param(m, s);
 	}
 	else if (*s == '>')
 	{
-		_dbg = fopen("/tmp/asl_parse.log", "a");
+		_dbg = _asl_trace_open("/tmp/asl_parse.log");
 		if (_dbg) { fprintf(_dbg, "[%d] -> parse_dst\n", getpid()); fclose(_dbg); }
 		_asl_out_module_parse_dst(m, s + 1, 010000);
-		_dbg = fopen("/tmp/asl_parse.log", "a");
+		_dbg = _asl_trace_open("/tmp/asl_parse.log");
 		if (_dbg) { fprintf(_dbg, "[%d] <- parse_dst OK\n", getpid()); fclose(_dbg); }
 	}
 
