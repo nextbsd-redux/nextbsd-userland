@@ -93,16 +93,52 @@ bootstrap_init(void)
 	}
 }
 
+/*
+ * Re-read bootstrap_port in a forked child.
+ *
+ * The constructor below runs once per *exec*, so on its own it leaves a
+ * forked child holding whatever value the parent's address space had at
+ * fork time. Apple re-reads TASK_BOOTSTRAP_PORT in the fork child as well
+ * (libSystem's atfork child handler), and launchd depends on that: to hand
+ * a child its job-manager port, runtime_fork() calls launchd_set_bport()
+ * -- which sets the *task* special port, not this global -- immediately
+ * before fork(). Only a re-read on the child side turns that into a usable
+ * bootstrap_port.
+ *
+ * Without it the child inherits the parent's stale value, and in launchd
+ * PID 1 that value is deliberately MACH_PORT_NULL (core.c nulls it to "cut
+ * off the Libc cache"). Every RPC the pre-exec child then makes over
+ * bootstrap_port fails with MACH_SEND_INVALID_DEST -- which is the
+ * os_assumes_zero logged on every single job spawn (#110), from
+ * vproc_mig_get_listener_port_rights() in job_start_child().
+ */
+static void
+liblaunch_bootstrap_atfork_child(void)
+{
+	mach_port_t inherited = bootstrap_port;
+
+	bootstrap_init();
+
+	/* bootstrap_init() falls back to MACH_PORT_NULL when the task has no
+	 * bootstrap port. At exec that is the right answer -- there is nothing
+	 * to lose. Here there is: a child whose task port read fails would end
+	 * up worse off than if we had never run. Keep what we inherited. */
+	if (bootstrap_port == MACH_PORT_NULL)
+		bootstrap_port = inherited;
+}
+
 /* Run bootstrap_init at .so load time. Equivalent to dyld's behavior
  * on Apple: bootstrap_port is populated before any user code runs.
  * Pairs with mach.ko's fork eventhandler (kern/task.c
  * mach_task_fork_bsport) which puts the parent's itk_bootstrap into
- * the child task at fork time. */
+ * the child task at fork time -- that eventhandler is what makes the
+ * child-side re-read above return the right port. */
 __attribute__((constructor))
 static void
 liblaunch_bootstrap_ctor(void)
 {
 	bootstrap_init();
+	(void)pthread_atfork(NULL, NULL, liblaunch_bootstrap_atfork_child);
 }
 
 kern_return_t
