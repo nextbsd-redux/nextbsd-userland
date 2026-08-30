@@ -606,13 +606,35 @@ done
 for f in notify_ipc.h notify_ipcUser.c; do
     test -s "$LIBNOTIFY_MIG/$f" || { echo "FAIL: mig produced no $f from notify_ipc.defs"; exit 1; }
 done
-# build.sh ~2157-2161: short-name symlinks (subsystem is notify_ipc; sources
-# include notifyServer.h / notifyUser.h).
-( cd "$LIBNOTIFY_MIG"
-  ln -sf notify_ipc.h notifyServer.h
-  ln -sf notify_ipc.h notifyUser.h
-  ln -sf notify_ipcServer.c notifyServer.c
-  ln -sf notify_ipcUser.c notifyUser.c )
+
+# The Mach NOTIFICATION subsystem (`subsystem notify 64`), which is a
+# different thing from notify_ipc and must be generated separately.
+#
+# notifyd demuxes do_notify_subsystem on its mach_notifs_channel to receive
+# MACH_NOTIFY_SEND_POSSIBLE and MACH_NOTIFY_DEAD_NAME. Those msgids are 64-73.
+# This used to be satisfied by symlinking notify_ipcServer.c to notifyServer.c,
+# which aliased do_notify_subsystem to _notify_ipc_subsystem -- base 1000. The
+# ranges do not overlap, so no notification ever matched the demux and every
+# one was destroyed. notifyd suspends a client on MACH_SEND_TIMED_OUT and waits
+# for SEND_POSSIBLE to resume it, so a suspended client was never resumed
+# (#78).
+#
+# -DMACH_NOTIFY_SEND_POSSIBLE_EXPECTED is REQUIRED and not cosmetic: notify.defs
+# guards mach_notify_send_possible behind it and emits `skip;` otherwise. Built
+# without it, this produces a notification server that handles dead_name and
+# friends while still silently dropping the one notification #78 needs.
+# Verified by generating both ways and diffing the routine table.
+note "mig: notify.defs (Mach notification subsystem, base 64)"
+run_mig "$LIBNOTIFY_MIG" $NOTIFY_INCS -DMACH_NOTIFY_SEND_POSSIBLE_EXPECTED=1 \
+    -header "notify.h" -user "notifyUser.c" \
+    -server "notifyServer.c" -sheader "notifyServer.h" \
+    "$SRC/Libnotify/notify.defs" \
+    || { echo "FAIL: mig could not process notify.defs"; exit 1; }
+for f in notifyServer.c notifyServer.h; do
+    test -s "$LIBNOTIFY_MIG/$f" || { echo "FAIL: mig produced no $f from notify.defs"; exit 1; }
+done
+grep -q "do_mach_notify_send_possible" "$LIBNOTIFY_MIG/notifyServer.c" \
+    || { echo "FAIL: notifyServer.c has no send_possible -- is MACH_NOTIFY_SEND_POSSIBLE_EXPECTED set?"; exit 1; }
 
 comp "libnotify"
 mkdir -p "$DESTDIR/usr/lib/system"
