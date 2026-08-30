@@ -353,8 +353,11 @@ reg_destroy(struct mach_kev_reg *r)
 		 * it is never drained. That is the shape dispatch_mig_server()
 		 * uses, so it would strand exactly the daemons that matter.
 		 */
-		(void)mach_port_move_member(mach_task_self(),
-		    (mach_port_name_t)r->ident, MACH_PORT_NULL);
+		/*
+		 * BISECT: un-member disabled, real pset release kept.
+		 * Splits F2 into its two halves to find which one breaks
+		 * event delivery.
+		 */
 		reg_release_pset(r->wrap_pset);
 	}
 	free(r);
