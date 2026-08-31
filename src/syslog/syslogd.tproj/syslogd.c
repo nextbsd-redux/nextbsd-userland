@@ -899,26 +899,12 @@ main(int argc, const char *argv[])
 	dispatch_resume(global.work_queue);
 
 	/*
-	 * Hostname-change notification registration (#78).
-	 *
-	 * This is a synchronous, untimed MIG RPC to notifyd. It used to run
-	 * from whatsmyhostname() during write_boot_log(), i.e. BEFORE
-	 * database_server() was dispatched -- so when the RPC went unanswered
-	 * syslogd never started serving and every client on the machine
-	 * blocked forever. Doing it here, after the service is up and on a
-	 * concurrent queue rather than the main thread, means an unanswered
-	 * reply costs a gethostname() per message instead of all system
-	 * logging.
-	 *
-	 * NOT global.work_queue: that is dispatch_queue_create(..., NULL),
-	 * i.e. SERIAL, and it is the queue that processes log messages
-	 * (global.work_queue_count is incremented around that work). Parking
-	 * a call that may never return on it would stall message processing
-	 * -- trading the old wedge for a slightly different one. A global
-	 * concurrent queue costs at most one blocked worker thread.
+	 * The hostname-change notification registration that used to happen
+	 * here is gone (#78). whatsmyhostname() no longer consults a notify
+	 * token at all -- it calls gethostname(), which cannot block on another
+	 * process -- so there is nothing left to register for. This removes
+	 * syslogd's last synchronous dependency on notifyd.
 	 */
-	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
-	    ^{ syslogd_register_hostname_notify(); });
 
 	/* FreeBSD port (Phase J runtime): without database_server's
 	 * parked Mach receive thread, our libdispatch's dispatch_main
