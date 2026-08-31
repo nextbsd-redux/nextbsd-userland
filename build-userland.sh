@@ -860,7 +860,7 @@ cp "$SRC/libmach/include/servers/bootstrap.h" "$DESTDIR/usr/include/servers/boot
 TCC="$CROSS_CC --sysroot=$SYSROOT -I$DESTDIR/usr/include -L$DESTDIR/usr/lib/system -L$SYSROOT/usr/lib -Wl,-rpath,/usr/lib/system"
 
 comp "mach_kmod tests (libsystem_kernel roundtrips)"
-for t in test_libmach test_mach_port test_evfilt_machport test_task_special_port test_host_bootstrap; do
+for t in test_libmach test_mach_port test_evfilt_machport test_task_special_port test_host_bootstrap test_mach_name_recycle; do
     $TCC -o "$TESTDIR/$t" "$SRC/mach_kmod/tests/$t.c" -lsystem_kernel
 done
 $TCC -o "$TESTDIR/test_evfilt_machport_concurrent" "$SRC/mach_kmod/tests/test_evfilt_machport_concurrent.c" -lsystem_kernel -lpthread
