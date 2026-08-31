@@ -429,8 +429,10 @@ machport_change_translate(int kq, const struct kevent_qos_s *src,
 		/* Native EVFILT_MACHPORT on the wrap pset, notify mode
 		 * (fflags = 0, no MACH_RCV_MSG): filt_machport signals
 		 * readiness without consuming; we drain via mach_msg on fire. */
+		/* LEVEL-triggered, deliberately: see the EV_CLEAR note at
+		 * the Phase 3 skip in mach_kevent_qos(). */
 		EV_SET(out, (uintptr_t)r->wrap_pset, EVFILT_MACHPORT_NATIVE,
-		    EV_ADD | EV_CLEAR, 0, 0, r);
+		    EV_ADD, 0, 0, r);
 		pthread_mutex_unlock(&g_reg_mtx);
 		return (0);
 	}
@@ -444,8 +446,9 @@ machport_change_translate(int kq, const struct kevent_qos_s *src,
 	pthread_mutex_lock(&g_reg_mtx);
 	reg_insert_locked(r);
 	pthread_mutex_unlock(&g_reg_mtx);
+	/* LEVEL-triggered: see the EV_CLEAR note at the Phase 3 skip. */
 	EV_SET(out, (uintptr_t)r->wrap_pset, EVFILT_MACHPORT_NATIVE,
-	    EV_ADD | EV_CLEAR,
+	    EV_ADD,
 	    0, 0, r);
 	return (0);
 }
@@ -1001,7 +1004,33 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 		 * fires after every delivered message, not just at setup.
 		 *
 		 * Skipping the entry leaves the message queued, so the next
-		 * ordinary poll delivers it.
+		 * ordinary poll delivers it -- but ONLY if the readiness knote is
+		 * level-triggered, which is why it is now registered EV_ADD with
+		 * no EV_CLEAR.
+		 *
+		 * It was EV_ADD | EV_CLEAR, and that made this skip silently lossy.
+		 * With EV_CLEAR the kernel clears KN_ACTIVE | KN_QUEUED when it
+		 * hands the event over (kern_event.c:2270), so the readiness is
+		 * consumed by the very call that skips it. Nothing re-arms the
+		 * knote -- ipc_pset_signal() only fires on a NEW enqueue -- so the
+		 * message sits on the port until unrelated traffic signals the set
+		 * again, and any client waiting for a reply hangs until then.
+		 *
+		 * Measured on the kernel side before this change: over four runs of
+		 * 150 sends, userland was handed 919/901/906/901 "message waiting"
+		 * notifications and performed 909/889/895/895 actual receives -- a
+		 * persistent gap of 10/12/11/6, about 1% of notifications, never
+		 * negative. aslmanager's service port holds an undelivered message
+		 * from boot on every boot for the same reason: skipped once during
+		 * registration, never signalled again. See nextbsd-userland#135 and
+		 * nextbsd-kernel#145.
+		 *
+		 * Level-triggered is what this code always assumed. filt_machport
+		 * returns non-zero while any member port holds a message, so kqueue
+		 * re-queues the knote (kern_event.c:2273) and the next ordinary
+		 * poll does deliver it. It cannot spin: ERROR_EVENTS calls are
+		 * KEVENT_FLAG_IMMEDIATE and return at once anyway, and ordinary
+		 * polls drain in Phase 3 below.
 		 */
 		if ((flags & KEVENT_FLAG_ERROR_EVENTS) &&
 		    !(scratch_ev[i].flags & EV_ERROR))
