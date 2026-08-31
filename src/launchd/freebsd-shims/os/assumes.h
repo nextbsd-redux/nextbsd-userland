@@ -29,8 +29,9 @@
 #define os_assumes_zero(e) __extension__({ \
 	__typeof__(0 ? (e) : (e)) _r = (e); \
 	if (_r != 0) { \
-		fprintf(stderr, "os_assumes_zero: %s != 0 at %s:%d\n", \
-		    #e, __FILE__, __LINE__); \
+		fprintf(stderr, "os_assumes_zero: %s == %lld (0x%llx) at %s:%d\n", \
+		    #e, (long long)_r, (unsigned long long)_r, \
+		    __FILE__, __LINE__); \
 	} \
 	_r; \
 })
