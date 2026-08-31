@@ -768,16 +768,24 @@ kern_return_t
 runtime_add_mport(mach_port_t name, mig_callback demux)
 {
 	/*
-	 * freebsd-launchd-mach (task #41 fix): use raw `name` as table
-	 * index. Apple's MACH_PORT_INDEX masks off the low 8 bits because
-	 * XNU encodes the index in bits 8+ and a generation in bits 0-7.
-	 * Our mach.ko allocates small sequential port names (0x10, 0x11,
-	 * 0x12, ...), so MACH_PORT_INDEX always returns 0 — every demux
-	 * registration overwrote slot 0, and lookups returned NULL/garbage.
-	 * Using `name` directly costs at most one entry per port name (still
-	 * tiny — launchd has < 50 ports).
+	 * Index by MACH_PORT_INDEX(name), not by the raw name.
+	 *
+	 * This used to use the raw name deliberately: MACH_PORT_INDEX was
+	 * defined as `(name) & ~0xff`, which returns 0 for every small
+	 * sequential name this kernel hands out (0x10, 0x11, ...), so every
+	 * demux registration overwrote slot 0. The macro was simply wrong for
+	 * this kernel's layout -- it has since been corrected in
+	 * <mach/port.h> to mask the index half rather than the generation
+	 * half, so it now returns what the raw name did.
+	 *
+	 * Using the macro matters for what comes next: once port names carry
+	 * a generation in their high byte, the raw name becomes a large
+	 * number and `(name + 1) * sizeof(mig_callback)` would try to
+	 * allocate hundreds of megabytes. Indexing by the index half keeps
+	 * the table proportional to the port count, as intended.
 	 */
-	size_t needed_table_sz = ((size_t)name + 1) * sizeof(mig_callback);
+	size_t idx = (size_t)MACH_PORT_INDEX(name);
+	size_t needed_table_sz = (idx + 1) * sizeof(mig_callback);
 	mach_port_t target_set = demux ? ipc_port_set : demand_port_set;
 
 	if (unlikely(needed_table_sz > mig_cb_table_sz)) {
@@ -798,7 +806,7 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
 		mig_cb_table = new_table;
 	}
 
-	mig_cb_table[name] = demux;
+	mig_cb_table[idx] = demux;
 
 	return errno = mach_port_move_member(mach_task_self(), name, target_set);
 }
@@ -806,7 +814,16 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
 kern_return_t
 runtime_remove_mport(mach_port_t name)
 {
-	mig_cb_table[name] = NULL;
+	/*
+	 * Bounds-check before clearing: a name whose index exceeds the table
+	 * (never registered, or registered before a shrink) would otherwise
+	 * write past the end. The table only ever grows, so an in-range index
+	 * is guaranteed to have been allocated.
+	 */
+	size_t idx = (size_t)MACH_PORT_INDEX(name);
+
+	if ((idx + 1) * sizeof(mig_callback) <= mig_cb_table_sz)
+		mig_cb_table[idx] = NULL;
 
 	return errno = mach_port_move_member(mach_task_self(), name, MACH_PORT_NULL);
 }
@@ -1088,7 +1105,16 @@ launchd_mig_demux(mach_msg_header_t *request, mach_msg_header_t *reply)
 	launchd_syslog(LOG_DEBUG, "MIG callout: %u", request->msgh_id);
 	/* freebsd-launchd-mach task #41: use raw port name as table index
 	 * (see runtime_add_mport comment above for why). */
-	mig_callback the_demux = mig_cb_table[request->msgh_local_port];
+	size_t demux_idx = (size_t)MACH_PORT_INDEX(request->msgh_local_port);
+	/*
+	 * Bounds-check the lookup. This indexed an unbounded, attacker-
+	 * influenced port name into a heap array with no check at all -- an
+	 * out-of-bounds read whose result was then called as a function
+	 * pointer.
+	 */
+	mig_callback the_demux =
+	    ((demux_idx + 1) * sizeof(mig_callback) <= mig_cb_table_sz)
+	    ? mig_cb_table[demux_idx] : NULL;
 	LD_TRACE("[T41-demux] mig_cb_table[0x%x] = %p",
 	    (unsigned)request->msgh_local_port, the_demux);
 	mach_msg_audit_trailer_t *tp = (mach_msg_audit_trailer_t *)((vm_offset_t)request + round_msg(request->msgh_size));

@@ -30,15 +30,38 @@
 	(((name) != MACH_PORT_NULL) && ((name) != MACH_PORT_DEAD))
 
 /*
- * MACH_PORT_INDEX / MACH_PORT_GEN — split a mach_port_name_t into
- * its kernel-table index and per-name generation counter. Apple's
- * canonical layout: low 24 bits are the index, high 8 are the gen.
- * launchd hashes ports by MACH_PORT_INDEX(name).
+ * MACH_PORT_INDEX / MACH_PORT_GEN — split a mach_port_name_t into its
+ * kernel-table index and per-name generation counter.
+ *
+ * These MUST match sys/mach/port.h in the kernel. They did not: the
+ * comment described Apple's canonical layout (index low, generation
+ * high) while the code implemented the opposite (index high, generation
+ * low), and neither matched what this kernel actually hands out.
+ *
+ * This kernel puts the generation in the HIGH byte and the index in the
+ * low 24 bits, because a port name is currently also a file descriptor
+ * and the index half has to stay a valid fd number. (When port names
+ * stop being file descriptors, both sides move to Apple's layout
+ * together -- these macros and the kernel's, in one change.)
+ *
+ * Consequence of the old definition, and the reason this is not a
+ * cosmetic fix: with `(name) & ~0xff` and a kernel that allocates small
+ * sequential names (0x10, 0x11, 0x12, ...), MACH_PORT_INDEX returned
+ * ZERO for every port on the system. Every consumer that hashes by it --
+ * launchd's HASH_PORT, libdispatch's VL_HASH -- put every port in bucket
+ * zero and degraded to a linear scan.
+ *
+ * Generation bits are all zero today, so for current names the value
+ * returned by MACH_PORT_INDEX is unchanged from the raw name. The fix is
+ * therefore behaviour-preserving for name IDENTITY and behaviour-fixing
+ * for hash DISTRIBUTION.
  */
-#define MACH_PORT_INDEX(name)	((name) & ~0xff)
-#define MACH_PORT_GEN(name)	(((mach_port_name_t)(name)) & 0xff)
+#define MACH_PORT_INDEX_MASK	0x00ffffffU
+#define MACH_PORT_INDEX(name)	((mach_port_name_t)(name) & MACH_PORT_INDEX_MASK)
+#define MACH_PORT_GEN(name)	((mach_port_name_t)(name) & 0xff000000U)
 #define MACH_PORT_MAKE(idx, gen) \
-	(((mach_port_name_t)(idx) & ~0xff) | ((mach_port_name_t)(gen) & 0xff))
+	(((mach_port_name_t)(idx) & MACH_PORT_INDEX_MASK) | \
+	 ((mach_port_name_t)(gen) & 0xff000000U))
 
 /* mach_port_array_t — an out-of-line array of port names, the shape
  * MIG hands back from RPCs that return port lists (e.g. the launchd
