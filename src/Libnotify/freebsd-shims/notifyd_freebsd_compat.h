@@ -17,11 +17,22 @@
 #define RB_PANIC	0x40000000	/* not a real FreeBSD flag */
 #endif
 
-/* MIG-generated subsystem name. Our MIG emits _notify_ipc_subsystem
- * (from `subsystem notify_ipc` + `serverprefix _`). notifyd's source
- * expects do_notify_subsystem — Apple xcode build renames via some
- * post-processing. Alias here keeps Apple source unchanged. */
-#define do_notify_subsystem		_notify_ipc_subsystem
+/*
+ * do_notify_subsystem is NOT aliased any more, and must not be.
+ *
+ * It used to be #defined to _notify_ipc_subsystem, on the theory that Apple
+ * renamed the symbol in post-processing. That was wrong: Apple generates it
+ * from mach's notify.defs, whose `subsystem notify 64` + `serverprefix do_`
+ * produce do_notify_subsystem directly. We now generate the same thing (see
+ * build-userland.sh) and notifyServer.h declares it.
+ *
+ * The alias was not merely redundant. notify_ipc's msgid base is 1000 while
+ * Mach notification msgids are 64-73, so pointing the notifications demux at
+ * notify_ipc meant no notification ever matched and every one was destroyed.
+ * notifyd suspends a client on MACH_SEND_TIMED_OUT and relies on
+ * MACH_NOTIFY_SEND_POSSIBLE to resume it, so suspended clients were never
+ * resumed -- they went permanently deaf while looking healthy (#78).
+ */
 
 /* Apple SYS_initgroups syscall number. Used to call initgroups
  * directly via syscall(2). FreeBSD has the same syscall via
