@@ -33,8 +33,6 @@
 #include <Block.h>
 #include <dispatch/dispatch.h>
 #include <os/assumes.h>
-#include <xpc/xpc.h>
-#include <xpc/connection.h>	/* xpc_connection_* */
 #include <syslog.h>
 #include <asl_core.h>
 #include <asl_private.h>
