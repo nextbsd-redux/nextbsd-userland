@@ -477,7 +477,15 @@ write_boot_log(int first)
 	 *
 	 * Gate this only together with teaching the probe to enable
 	 * SYSLOGD_TRACE for itself. */
-#define _WBL(tag) fprintf(stderr, "[%d] wbl: " tag "\n", getpid())
+/*
+ * fflush is load-bearing, not tidiness. stderr is redirected to
+ * /var/log/syslogd.stderr -- a FILE -- so stdio full-buffers it and a wedge
+ * leaves the tail of the trace in an unflushed buffer. The amd64 boot test
+ * shows this trace stopping at "after pututxline" while arm64 gets further,
+ * and without a flush there is no way to tell a real stall from a truncated
+ * buffer. See nextbsd-userland#87.
+ */
+#define _WBL(tag) do { fprintf(stderr, "[%d] wbl: " tag "\n", getpid()); fflush(stderr); } while (0)
 
 	_WBL("enter");
 
@@ -515,7 +523,15 @@ write_boot_log(int first)
 	_WBL("after pututxline");
 
 	msg = asl_msg_new(ASL_TYPE_MSG);
-	if (msg == NULL) return;
+	_WBL("after asl_msg_new");
+	if (msg == NULL)
+	{
+		/* Silent return before #87's instrumentation: indistinguishable
+		 * from a hang in the trace, and it skips the BOOT_TIME message
+		 * entirely. */
+		_WBL("asl_msg_new returned NULL -- giving up");
+		return;
+	}
 
 	asl_msg_set_key_val(msg, ASL_KEY_SENDER, "bootlog");
 	asl_msg_set_key_val(msg, ASL_KEY_FACILITY, "com.apple.system.utmpx");
@@ -559,6 +575,21 @@ main(int argc, const char *argv[])
 	 * reliably at /var/log/syslogd.stderr; /tmp is unreliable — a
 	 * fresh fs is mounted over it mid-boot). Defined up-front so the
 	 * pre-init_globals path is traced too. */
+/*
+ * Startup breadcrumb, UNGATED and flushed -- diagnostic for
+ * nextbsd-userland#87 (amd64 syslogd never creates /var/run/log).
+ *
+ * _PJ_BC above is gated on SYSLOGD_TRACE_STARTUP, which the CI boot test does
+ * not set, so every checkpoint after write_boot_log() is invisible in exactly
+ * the run being debugged. That is also why run.sh's srv_disp column has always
+ * read 0: not a syslogd signal, just a disabled macro.
+ *
+ * stderr is a FILE here (/var/log/syslogd.stderr), so stdio full-buffers it;
+ * without the flush a wedge leaves the tail of the trace unwritten.
+ */
+#define _SBC(tag) do { fprintf(stderr, "[%d] sbc: " tag "\n", getpid()); \
+	fflush(stderr); } while (0)
+
 #define _PJ_BC(tag) do { if (_pj_trace_on()) \
 	fprintf(stderr, "[%d] PJ: " tag "\n", getpid()); } while (0)
 
@@ -769,19 +800,26 @@ main(int argc, const char *argv[])
 	 * Log UTMPX boot time record
 	 */
 	_PJ_BC("before write_boot_log");
+	_SBC("before write_boot_log");
 	write_boot_log(first_syslogd_start);
+	_SBC("after write_boot_log");
 
 	/* default NOTIFY_SYSTEM_MASTER settings */
 	_PJ_BC("before notify_register_plain");
+	_SBC("before notify_register_plain");
 	master_val = 0x0;
 	notify_register_plain(NOTIFY_SYSTEM_MASTER, &master_token);
+	_SBC("after notify_register_plain");
 	_PJ_BC("after notify_register_plain");
 	notify_set_state(master_token, master_val);
+	_SBC("after notify_set_state");
 	_PJ_BC("after notify_set_state");
 
 	asldebug("reading launch plist\n");
 	_PJ_BC("before launch_config");
+	_SBC("before launch_config");
 	launch_config();
+	_SBC("after launch_config");
 	_PJ_BC("after launch_config");
 	_PJ_BC("about to call asldebug(\"initializing modules\")");
 	asldebug("initializing modules\n");
