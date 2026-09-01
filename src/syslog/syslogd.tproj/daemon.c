@@ -974,6 +974,15 @@ control_message(asl_msg_t *msg)
 	return 0;
 }
 
+/*
+ * Ungated, flushed breadcrumb -- diagnostic for nextbsd-userland#87.
+ * The existing traces here go through _syslogd_trace_open(), which is gated,
+ * so CI's diagnostics print "(no process_msg.log)" and tell us nothing about
+ * the run being debugged.
+ */
+#define _PMB(tag) do { fprintf(stderr, "[%d] pmb: " tag "\n", getpid()); \
+	fflush(stderr); } while (0)
+
 void
 process_message(asl_msg_t *msg, uint32_t source)
 {
@@ -1031,10 +1040,12 @@ process_message(asl_msg_t *msg, uint32_t source)
 		uid_t uid = -2;
 		FILE *_d = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_d) { fprintf(_d, "[%d] process_message INLINE source=%u\n", getpid(), source); fclose(_d); }
+		_PMB("inline entry");
 
 		status = aslmsg_verify(msg, source, &kplevel, &uid);
 		_d = _syslogd_trace_open("/tmp/process_msg.log");
 		if (_d) { fprintf(_d, "[%d]   aslmsg_verify -> %u\n", getpid(), status); fclose(_d); }
+		_PMB("aslmsg_verify returned");
 		if (status == VERIFY_STATUS_OK)
 		{
 			if ((source == SOURCE_KERN) && (kplevel >= 0))
@@ -1047,7 +1058,9 @@ process_message(asl_msg_t *msg, uint32_t source)
 				notify_post(kern_notify_key[kplevel]);
 			}
 			if ((uid == 0) && is_control) control_message(msg);
+			_PMB("before asl_out_message");
 			asl_out_message(msg, msize);
+			_PMB("after asl_out_message");
 			_d = _syslogd_trace_open("/tmp/process_msg.log");
 			if (_d) { fprintf(_d, "[%d]   asl_out_message returned\n", getpid()); fclose(_d); }
 		}

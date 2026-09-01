@@ -1769,8 +1769,10 @@ asl_out_message(asl_msg_t *msg, int64_t msize)
 	 * but with one inline caller per recv socket that's already the
 	 * case. (Tracked: task #41 — proper libdispatch fix.) */
 	/* Phase J runtime debug: breadcrumb to stderr. */
-#define _AOM(tag) do { if (_syslogd_trace_on()) \
-	fprintf(stderr, "[%d] aom: " tag "\n", getpid()); } while (0)
+/* #87 diagnostic: ungated + flushed. Gated here means invisible in the
+ * one run being debugged, same as _PJ_BC and the process_msg.log traces. */
+#define _AOM(tag) do { fprintf(stderr, "[%d] aom: " tag "\n", getpid()); \
+	fflush(stderr); } while (0)
 	_AOM("enter");
 	{
 		int ignore = 0;
