@@ -1765,31 +1765,11 @@ kern_return_t __notify_server_dump
 	return KERN_SUCCESS;
 }
 
-static uid_t
-xpc_event_token_get_uid(uint64_t event_token)
-{
-#if TARGET_OS_OSX
-	au_asid_t asid = xpc_event_publisher_get_subscriber_asid(global.notify_state.event_publisher, event_token);
-
-	auditinfo_addr_t info = { 0 };
-	info.ai_asid = asid;
-
-	int ret = auditon(A_GETSINFO_ADDR, &info, sizeof(info));
-	if (ret != 0) {
-		log_message(ASL_LEVEL_WARNING, "auditon on asid %d failed with errno %d, skipping registration\n", asid, errno);
-		return KAUTH_UID_NONE;
-	}
-
-	return info.ai_auid;
-#else // TARGET_OS_OSX
-	// XPC event registrations historically bypassed UID permission checks on
-	// iOS since those were coming from UEA running as root. Preserve that and
-	// return root UID.
-	// There isn't a way to obtain the UID for an event token on iOS.
-	// rdar://problem/50776875
-	(void)event_token;
-	return 0; // root
-#endif // TARGET_OS_OSX
+/*
+ * xpc_event_token_get_uid() removed with notifyd_matching_register(),
+ * its only caller (nextbsd-userland#144). Its body was already inside
+ * #if TARGET_OS_OSX == 0 on this platform.
+ */
 
 
 kern_return_t __notify_generate_common_port
