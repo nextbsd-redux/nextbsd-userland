@@ -35,9 +35,16 @@ jobs:
       arch: amd64
       target_arch: amd64
       boot: true                 # x86 runner KVM-boots the amd64 image
-      boot_soft: true            # still non-gating: two pre-existing markers must be fixed first (#87).
-                                 # SYSLOG-RUN (#78, ~80% amd64) and IPCFG-ARP (seen once in ten arch-runs).
-                                 # Both long predate this change; boot_soft was hiding them, not causing them.
+      boot_soft: false           # GATING. A failed marker now fails the lane (#159).
+                                 # The two markers this was waiting on are fixed: SYSLOG-RUN by the
+                                 # aslmanager boot-stall removal (#143), IPCFG-ARP by surfacing its
+                                 # result to the console. Both verified passing on amd64.
+                                 #
+                                 # This WILL be red until #158 is fixed -- scrltest and
+                                 # test_libdispatch_mach both SIGSEGV in teardown AFTER passing, so
+                                 # their success markers never reach the stream. That is the point:
+                                 # a suite that reports green while two tests crash is worse than a
+                                 # red one, and boot_soft was hiding exactly that.
       boot_gate: full            # boot -> login -> on-image Mach/launchd/configd suite
       fbsd_sha: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
     secrets: inherit
@@ -49,7 +56,7 @@ jobs:
       target_arch: aarch64
       boot: true                 # qemu-system-aarch64 on a native arm64 runner
       boot_runner: ubuntu-24.04-arm
-      boot_soft: true            # still non-gating -- see the amd64 note above and #87.
+      boot_soft: false           # GATING -- see the amd64 note above (#159, blocked on #158).
       boot_gate: full            # post-login hang was getty std.9600 vs pl011 DCD (nextbsd#355), fixed by 3wire.9600 — run the full suite
       fbsd_sha: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
     secrets: inherit
