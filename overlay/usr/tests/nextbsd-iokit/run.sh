@@ -12,6 +12,17 @@
 
 set -u
 
+# Job table BEFORE the IOKit tests. This job runs AFTER freebsd-launchd-mach,
+# so this dump doubles as the record of what that suite left behind. kextd
+# loads kexts here, which is the most likely way this job perturbs the daemon
+# population. Paired with the END dump before each IOKIT-RUN-DONE below.
+if [ -x /usr/tests/launchctl-snapshot.sh ]; then
+    /usr/tests/launchctl-snapshot.sh "BEGIN nextbsd-iokit"
+else
+    echo "(launchctl-snapshot.sh not installed — skipping the BEGIN nextbsd-iokit job-table dump)"
+fi
+
+
 # IOREG — libIOKit registry walk via the K1 /dev/ioregistry device (C1.1,
 # #218). libIOKit reads /dev/ioregistry (IOREGIOC* ioctls); hwregd was retired
 # in #218. This gate exercises the live path with the `ioreg` tool and
@@ -160,6 +171,9 @@ amd64|x86_64)
 	echo "IOKIT-LOOKUP-SKIP: no IntelWiFi personality on $(uname -m) to resolve"
 	echo "KEXTD-LOAD-SKIP: no arm64 IntelWiFi.kext build"
 	echo "EM-AUTOLOAD-SKIP: arm64 virt has no em(4) NIC (virtio-net) and IntelEthernet is x86-64-only"
+	if [ -x /usr/tests/launchctl-snapshot.sh ]; then
+		/usr/tests/launchctl-snapshot.sh "END nextbsd-iokit (arm64 early exit)"
+	fi
 	echo "IOKIT-RUN-DONE"
 	exit 0
 	;;
@@ -290,5 +304,12 @@ fi
 
 # Done-sentinel: lets boot-test.sh end the IOKit section the instant this script
 # finishes (pull model) instead of waiting a fixed per-marker timeout.
+# Job table AFTER the IOKit tests. Diff against the BEGIN dump above.
+if [ -x /usr/tests/launchctl-snapshot.sh ]; then
+    /usr/tests/launchctl-snapshot.sh "END nextbsd-iokit"
+else
+    echo "(launchctl-snapshot.sh not installed — skipping the END nextbsd-iokit job-table dump)"
+fi
+
 echo "IOKIT-RUN-DONE"
 exit 0

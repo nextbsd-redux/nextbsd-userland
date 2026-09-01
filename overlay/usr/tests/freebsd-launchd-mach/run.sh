@@ -14,6 +14,18 @@
 
 set -u
 
+# Job table BEFORE anything runs. Paired with the END dump at the bottom of
+# this script, the two bracket every test here: a daemon that is up at BEGIN
+# and gone (or holding a NEW pid, i.e. it crashed and KeepAlive restarted it)
+# at END was taken down by the tests in between. The Mach stress rounds are
+# exactly that kind of load, and no single marker in this suite would say so.
+if [ -x /usr/tests/launchctl-snapshot.sh ]; then
+    /usr/tests/launchctl-snapshot.sh "BEGIN freebsd-launchd-mach"
+else
+    echo "(launchctl-snapshot.sh not installed — skipping the BEGIN freebsd-launchd-mach job-table dump)"
+fi
+
+
 # 1. kernel-side: mach module registered. mach is compiled INTO the kernel
 # (#181), so it's a kernel module rather than a separate .ko. The kld* CLIs
 # were retired (#193); kextstat -m queries the module by name via modfind(2)
@@ -2043,11 +2055,31 @@ else
     fi
 fi
 
+# --------------------------------------------------- daemon contract --
+# DAEMON-STATE — every LaunchDaemon held to what its own plist declares.
+# GATING. Runs after the stress rounds on purpose: before them it would only
+# prove boot worked, after them it proves the stress did not quietly kill a
+# daemon. See daemon-state.sh for why launchctl's Status column cannot be used
+# for this (job_export() always inserts LastExitStatus, so "0" means nothing).
+echo "==> LaunchDaemon state contract"
+if [ -x /usr/tests/freebsd-launchd-mach/daemon-state.sh ]; then
+    /usr/tests/freebsd-launchd-mach/daemon-state.sh
+else
+    echo "DAEMON-STATE-FAIL: daemon-state.sh not installed"
+fi
+
 echo "==> Mach service wedge check"
 if [ -x /usr/tests/freebsd-launchd-mach/wedge-check.sh ]; then
     /usr/tests/freebsd-launchd-mach/wedge-check.sh 15 || true
 else
     echo "WEDGE-CHECK-FAIL: wedge-check.sh not installed"
+fi
+
+# Job table AFTER every test above. Diff it against the BEGIN dump.
+if [ -x /usr/tests/launchctl-snapshot.sh ]; then
+    /usr/tests/launchctl-snapshot.sh "END freebsd-launchd-mach"
+else
+    echo "(launchctl-snapshot.sh not installed — skipping the END freebsd-launchd-mach job-table dump)"
 fi
 
 echo "LAUNCHD-MACH-RUN-DONE"

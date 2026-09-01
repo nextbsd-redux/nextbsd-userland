@@ -1398,6 +1398,28 @@ expect {
         puts "\nOK: launchd demand-launched aslmanager on a Mach message — #143 can be reverted to demand launch, no PID-1 change needed"
     }
 }
+# DAEMON-STATE — every LaunchDaemon held to the contract its own plist
+# declares: KeepAlive/RunAtLoad jobs must have a live process (launchd's PID
+# column, cross-checked against ps), demand/periodic jobs must be loaded.
+# GATING. This is the check #81 asked for and never got: the LAUNCHCTL-LIST
+# assertion above only proves the labels are LOADED, and launchctl's Status
+# column cannot distinguish "never ran" from "exited 0" because job_export()
+# (core.c:1095) always inserts LastExitStatus -- which is how the box once
+# showed "13 jobs all at status 0 with syslog completely dead" (#78).
+# It runs after the Mach stress rounds, so it also catches a daemon the stress
+# killed rather than only one that never started.
+expect {
+    timeout {
+        puts "\nWARN: DAEMON-STATE marker not seen (older run.sh without daemon-state.sh — informational)"
+    }
+    "DAEMON-STATE-FAIL" {
+        puts "\nFAIL: DAEMON-STATE-FAIL — a LaunchDaemon is not in the state its plist declares"
+        exit 1
+    }
+    "DAEMON-STATE-OK" {
+        puts "\nOK: every LaunchDaemon matches its declared contract"
+    }
+}
 # Wait for the launchd-mach run.sh to FINISH (its FreeBSD PAM tail was removed —
 # not a Darwin/Mach component) before starting the IOKit script, so the IOKit
 # run.sh isn't queued behind it. This is the pull model's sequencing barrier:
