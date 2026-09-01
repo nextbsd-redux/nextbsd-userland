@@ -38,11 +38,7 @@ uint32_t debug;
 FILE *debugfp;
 dispatch_queue_t work_queue;
 
-static dispatch_queue_t server_queue;
 static time_t module_ttl;
-static xpc_connection_t listener;
-static bool main_task_enqueued;
-static bool initial_main_task = true;
 static dispatch_source_t sig_term_src;
 
 /* wait 5 minutes to run main task after being invoked by XPC */
@@ -338,107 +334,31 @@ cli_main(int argc, char *argv[])
 	return 0;
 }
 
-/* dispatched on server_queue, dispatches to work_queue */
-void
-main_task(void)
-{
-	/* if main task is already running or queued, do nothing */
-	if (main_task_enqueued) return;
 
-	main_task_enqueued = true;
 
-	os_transaction_t transaction = os_transaction_create("com.apple.aslmanager");
-
-	if (initial_main_task)
-	{
-		initial_main_task = false;
-		dispatch_time_t delay = dispatch_walltime(NULL, MAIN_TASK_INITIAL_DELAY * NSEC_PER_SEC);
-
-		dispatch_after(delay, work_queue, ^{
-			cli_main(0, NULL);
-			main_task_enqueued = false;
-			os_release(transaction);
-		});
-	}
-	else
-	{
-		dispatch_async(work_queue, ^{
-			cli_main(0, NULL);
-			main_task_enqueued = false;
-			os_release(transaction);
-		});
-	}
-}
-
-static void
-accept_connection(xpc_connection_t peer)
-{
-	xpc_connection_set_event_handler(peer, ^(xpc_object_t request) {
-		if (xpc_get_type(request) == XPC_TYPE_DICTIONARY)
-		{
-			uid_t uid = xpc_connection_get_euid(peer);
-
-			/* send a reply immediately */
-			xpc_object_t reply = xpc_dictionary_create_reply(request);
-			if (reply != NULL)
-			{
-				xpc_connection_send_message(peer, reply);
-				xpc_release(reply);
-			}
-
-			/*
-			 * Some day, we may use the dictionary to pass parameters
-			 * to aslmanager, but for now, we ignore the input.
-			 */
-
-			if (uid == geteuid())
-			{
-				main_task();
-			}
-		}
-		else if (xpc_get_type(request) == XPC_TYPE_ERROR)
-		{
-			/* disconnect */
-		}
-	});
-
-	xpc_connection_resume(peer);
-}
 
 int
 main(int argc, char *argv[])
 {
-	int64_t is_managed = 0;
-	int i;
-
-	vproc_swap_integer(NULL, VPROC_GSK_IS_MANAGED, NULL, &is_managed);
-
-	if (is_managed == 0) return cli_main(argc, argv);
-
-	/* Set I/O policy */
+	/*
+	 * Periodic model (nextbsd-userland#143).
+	 *
+	 * This used to branch on VPROC_GSK_IS_MANAGED: unmanaged ran cli_main()
+	 * and exited, managed set up an XPC listener on com.apple.aslmanager and
+	 * called dispatch_main() forever, doing work only when a client sent a
+	 * message. The client half was asl_trigger_aslmanager() in
+	 * libsystem_asl, a synchronous XPC round-trip -- which is what stalled
+	 * syslogd for 30s on the boot path before it bound /var/run/log (#87).
+	 *
+	 * Both halves are gone. aslmanager is now driven by StartInterval in
+	 * com.apple.aslmanager.plist, which is what the pre-XPC design did, so
+	 * managed and unmanaged behave identically: do the work, exit.
+	 *
+	 * main_task()'s enqueue/delay machinery went with it -- it existed to
+	 * coalesce bursts of XPC triggers, and all it ever did was schedule
+	 * cli_main(0, NULL) on work_queue.
+	 */
 	setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_THROTTLE);
 
-	/* XPC server */
-	server_queue = dispatch_queue_create("aslmanager", NULL);
-
-	work_queue = dispatch_queue_create("work queue", NULL);
-
-	/* Exit on SIGTERM */
-	signal(SIGTERM, SIG_IGN);
-	sig_term_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, (uintptr_t)SIGTERM, 0, dispatch_get_main_queue());
-	dispatch_source_set_event_handler(sig_term_src, ^{
-		debug_log(ASL_LEVEL_NOTICE, "SIGTERM exit\n");
-		exit(0);
-	});
-
-	dispatch_resume(sig_term_src);
-
-	/* Handle incoming messages. */
-	listener = xpc_connection_create_mach_service("com.apple.aslmanager", server_queue, XPC_CONNECTION_MACH_SERVICE_LISTENER);
-	xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
-		if (xpc_get_type(peer) == XPC_TYPE_CONNECTION) accept_connection(peer);
-	});
-	xpc_connection_resume(listener);
-
-	dispatch_main();
+	return cli_main(argc, argv);
 }

@@ -10,11 +10,22 @@
 	<array>
 		<string>aslmanager</string>
 	</array>
-	<key>MachServices</key>
-	<dict>
-		<key>com.apple.aslmanager</key>
-		<true/>
-	</dict>
+	<!--
+	     Driven by StartInterval, not by an XPC trigger (nextbsd-userland#143).
+
+	     This job used to declare MachServices com.apple.aslmanager and be
+	     demand-launched by asl_trigger_aslmanager(), a synchronous XPC
+	     round-trip from libsystem_asl. syslogd reaches that call from
+	     write_boot_log() before it binds /var/run/log, so when aslmanager did
+	     not answer the system had no logging for the 30s XPC timeout (#87).
+
+	     Both halves are removed. Store rotation is advisory and latency
+	     tolerant -- the ASL store is trimmed by size and age, so running it
+	     hourly rather than on demand only delays trimming, it does not lose
+	     data. This is what the pre-XPC design did.
+	-->
+	<key>StartInterval</key>
+	<integer>3600</integer>
 	<key>EnableTransactions</key>
 	<true/>
 	<key>EnablePressuredExit</key>
