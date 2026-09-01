@@ -480,21 +480,37 @@ db_save_message(asl_msg_t *msg)
 	 * unless SYSLOGD_TRACE is set. This runs once per saved message and
 	 * syslogd's stderr lands in /var/log/syslogd.stderr, so ungated it
 	 * writes to disk for every message the system logs. */
-#define _DBSM(...) do { if (_syslogd_trace_on()) { \
+/* #87 diagnostic: UNGATED and flushed.
+ *
+ * The gating rationale above is sound in general -- this runs once per saved
+ * message and syslogd's stderr is a file -- but it makes the breadcrumbs blind
+ * in exactly the run being debugged. amd64 stops inside db_save_message()
+ * during write_boot_log(), which is a handful of messages into boot, so the
+ * volume argument does not apply to the failure being investigated.
+ *
+ * The flush matters as much as the ungating: stderr here is a FILE, so stdio
+ * full-buffers it and a hang leaves the tail of the trace unwritten.
+ */
+#define _DBSM(...) do { \
 	fprintf(stderr, "[%d] dbsm: ", getpid()); \
-	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } \
+	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); \
+	fflush(stderr); \
 } while(0)
 
 	_DBSM("enter");
 
+	_DBSM("before dispatch_once");
 	dispatch_once(&once, ^{
+		_DBSM("  inside once: before dispatch_source_create");
 		timer_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+		_DBSM("  inside once: after dispatch_source_create");
 		dispatch_source_set_event_handler(timer_src, ^{
 			notify_post(kNotifyASLDBUpdate);
 			dispatch_suspend(timer_src);
 			armed = 0;
 		});
 		armed = 0;
+		_DBSM("  inside once: done");
 	});
 
 	_DBSM("after dispatch_once");
