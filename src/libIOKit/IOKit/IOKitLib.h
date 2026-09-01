@@ -229,11 +229,12 @@ kern_return_t	IOServiceGetMatchingServices(mach_port_t mainPort,
  * deferred — SCDynamicStore's runloop-source path covers the same
  * pattern when needed.
  *
- * NOTE: this facade uses a raw mach_msg(MACH_RCV_MSG|MACH_RCV_
- * TIMEOUT,500ms) loop inside a pthread for delivery, NOT a
- * libdispatch DISPATCH_SOURCE_TYPE_MACH_RECV source — task #41 +
- * the libSC iter 2 / hwregd-phase0 notes record that those sources
- * do not reliably deliver in this repo.
+ * NOTE: this comment used to say the facade delivers via a raw
+ * mach_msg(MACH_RCV_MSG|MACH_RCV_TIMEOUT,500ms) loop in a pthread
+ * and NOT a libdispatch source. That is no longer true and has not
+ * been since commit 05a674f, which replaced the pthread poll loop
+ * with a DISPATCH_SOURCE_TYPE_MACH_RECV source (see IOKitNotify.c:337).
+ * The header was never updated. Corrected in nextbsd-userland#154.
  */
 #include <dispatch/dispatch.h>
 

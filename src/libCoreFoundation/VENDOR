@@ -1,5 +1,6 @@
 Upstream SHA: 0e20e4a7f300918a9a09789ab86b34b377d6cf9c
 Upstream: https://github.com/swiftlang/swift-corelibs-foundation
 Subtree: Sources/CoreFoundation/
-Date: 2026-05-15 (initial vendor drop, unmodified)
+Date: 2026-05-15 (initial vendor drop)
+Status: MODIFIED -- 8 files carry local changes since the drop (nextbsd-userland#154)
 License: Apache-2.0 (see LICENSE)

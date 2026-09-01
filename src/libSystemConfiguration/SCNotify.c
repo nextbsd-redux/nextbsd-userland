@@ -152,7 +152,7 @@ __SCDynamicStoreAddNotificationPort(SCDynamicStoreRef store)
 	 * right to configd. We keep the receive right to listen on. The
 	 * notifyviaport is issued *after* the dispatch source is armed on this
 	 * port (see __sc_notify_start) — telling configd to start sending
-	 * before the edge-triggered EVFILT_MACHPORT knote is attached would
+	 * before the EVFILT_MACHPORT knote is attached would
 	 * race the first notification past it.
 	 */
 	kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
@@ -250,7 +250,9 @@ __SCDynamicStoreDeliverChanges(SCDynamicStoreRef store)
  * in notify mode and carries no message, so drain notifyPort ourselves —
  * fully, to empty: several configd notifications can coalesce into one fire,
  * and any message left queued keeps the source ready (it would re-fire, or
- * with an edge-triggered backend stall). The messages are bare headers, so
+ * with an edge-triggered backend stall -- note the backend is level-triggered
+ * since nextbsd-userland#136, so this workaround may now be unnecessary; it is
+ * harmless either way). The messages are bare headers, so
  * an unbounded drain can't be flooded. Then run the active delivery. Runs on
  * the caller's dispatch queue (dispatch mode) or the private notifyQueue
  * (run-loop mode).
@@ -379,7 +381,9 @@ __sc_notify_start(SCDynamicStoreRef store)
 
 	/*
 	 * Arm the source BEFORE telling configd to start sending. The native
-	 * EVFILT_MACHPORT filter is edge-triggered (EV_CLEAR) and libdispatch
+	 * EVFILT_MACHPORT filter is LEVEL-triggered as of nextbsd-userland#136
+	 * (libmach now registers the readiness knote EV_ADD without EV_CLEAR;
+	 * it was EV_CLEAR when this comment was written) and libdispatch
 	 * installs the knote asynchronously on its manager, so notifyviaport
 	 * must not precede the arm — otherwise configd's first notification can
 	 * reach notifyPort before the knote attaches and be missed (the bug the
