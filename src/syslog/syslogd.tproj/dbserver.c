@@ -483,16 +483,38 @@ _internal_send_to_direct_watchers(asl_msg_t *msg)
 void
 send_to_direct_watchers(asl_msg_t *msg)
 {
-	dispatch_once(&watch_init_once, ^{
-		watch_queue = dispatch_queue_create("Direct Watch Queue", NULL);
-	});
-
+	/*
+	 * Run inline rather than dispatch_async (nextbsd-userland#142).
+	 *
+	 * This is reached from the bsd_in recv pthread:
+	 *
+	 *   process_message()        daemon.c    <- already inlined
+	 *     asl_out_message()      asl_action.c <- already inlined
+	 *       _send_to_asl_store() asl_action.c
+	 *         db_save_message()  dbserver.c
+	 *           send_to_direct_watchers()    <- this, the one that was missed
+	 *
+	 * asl_action.c documents why the others were inlined: "our libdispatch's
+	 * dispatch_async SIGSEGVs in dx_push from arbitrary pthreads despite
+	 * root_queues_init". This was the same pattern on the per-message path.
+	 * PR #139 demonstrated it again -- it routed through
+	 * xpc_connection_send_message(), which is dispatch_async internally, from
+	 * this same pthread, and killed syslogd outright.
+	 *
+	 * Serialisation is preserved: watch_queue exists to serialise writes to
+	 * the watch fds, and there is one caller per recv socket, so the calls
+	 * are already serial. The retain/release pair is kept so ownership
+	 * semantics match what the async block did.
+	 *
+	 * The other four watch_queue users are NOT changed. add_lockdown_session,
+	 * remove_lockdown_session and the two in _asl_message_processing all run
+	 * from database_server()'s Mach receive loop, which IS a libdispatch
+	 * global-queue worker (dispatched at syslogd.c:826), so dispatch_async is
+	 * legitimate there.
+	 */
 	asl_msg_retain(msg);
-
-	dispatch_async(watch_queue, ^{
-		_internal_send_to_direct_watchers(msg);
-		asl_msg_release(msg);
-	});
+	_internal_send_to_direct_watchers(msg);
+	asl_msg_release(msg);
 }
 
 /*
