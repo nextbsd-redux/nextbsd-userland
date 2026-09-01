@@ -628,6 +628,7 @@ server_preflight(audit_token_t audit, int token, uid_t *uid, gid_t *gid, pid_t *
  */
 static bool check_access_to_post_restricted_name(const char *name, audit_token_t audit) {
 	char entitlement_key[ENTITLEMENT_MAXLEN+1] = APPLE_RESTRICT_ENTITLEMENT_PREFIX;
+	xpc_object_t entitlement_value;
 	bool result = false;
 
 	// Look for "com.apple.private.restrict-post.*"
@@ -643,12 +644,11 @@ static bool check_access_to_post_restricted_name(const char *name, audit_token_t
 		return false;
 	}
 
-	/*
-	 * No code-signed entitlements on FreeBSD (nextbsd-userland#144).
-	 * libxpc's xpc_copy_entitlement_for_token() returns NULL
-	 * unconditionally, so this gate already always denied. Keeping it
-	 * fail-closed, which is what it did before and what it should do.
-	 */
+	entitlement_value = xpc_copy_entitlement_for_token(entitlement_key, &audit);
+	if (entitlement_value) {
+		result = xpc_bool_get_value(entitlement_value);
+		xpc_release(entitlement_value);
+	}
 	if (result == false) {
 		log_message(ASL_LEVEL_ERR, "Post %s rejected: missing entitlement\n", name);
 	}
@@ -1765,12 +1765,84 @@ kern_return_t __notify_server_dump
 	return KERN_SUCCESS;
 }
 
-/*
- * xpc_event_token_get_uid() removed with notifyd_matching_register(),
- * its only caller (nextbsd-userland#144). Its body was already inside
- * #if TARGET_OS_OSX == 0 on this platform.
- */
+static uid_t
+xpc_event_token_get_uid(uint64_t event_token)
+{
+#if TARGET_OS_OSX
+	au_asid_t asid = xpc_event_publisher_get_subscriber_asid(global.notify_state.event_publisher, event_token);
 
+	auditinfo_addr_t info = { 0 };
+	info.ai_asid = asid;
+
+	int ret = auditon(A_GETSINFO_ADDR, &info, sizeof(info));
+	if (ret != 0) {
+		log_message(ASL_LEVEL_WARNING, "auditon on asid %d failed with errno %d, skipping registration\n", asid, errno);
+		return KAUTH_UID_NONE;
+	}
+
+	return info.ai_auid;
+#else // TARGET_OS_OSX
+	// XPC event registrations historically bypassed UID permission checks on
+	// iOS since those were coming from UEA running as root. Preserve that and
+	// return root UID.
+	// There isn't a way to obtain the UID for an event token on iOS.
+	// rdar://problem/50776875
+	(void)event_token;
+	return 0; // root
+#endif // TARGET_OS_OSX
+}
+
+void
+notifyd_matching_register(uint64_t event_token, xpc_object_t descriptor)
+{
+	assert(xpc_get_type(descriptor) == XPC_TYPE_DICTIONARY);
+	const char *name = xpc_dictionary_get_string(descriptor, NOTIFY_XPC_EVENT_PAYLOAD_KEY_NAME);
+
+	// Use bogus PID for XPC event registrations
+	pid_t pid = -1;
+	int token = global.next_no_client_token++;
+
+	call_statistics.reg++;
+	call_statistics.reg_xpc_event++;
+
+	log_message(ASL_LEVEL_DEBUG, "notifyd_matching_register %s %d %llu\n", name, token, event_token);
+
+	uid_t uid = xpc_event_token_get_uid(event_token);
+	if (uid == KAUTH_UID_NONE) {
+		return;
+	}
+	// notifyd can't call getpwuid_r to find out GID for UID as it deadlocks
+	// with opendirectoryd. Use bogus GID to fail group access checks if any.
+	gid_t gid = KAUTH_GID_NONE;
+
+	uint64_t unused_nid = 0;
+	uint32_t status = _notify_lib_register_xpc_event(&global.notify_state, name, pid, token, event_token, uid, gid, &unused_nid);
+	if (status != NOTIFY_STATUS_OK) {
+		if (status != NOTIFY_STATUS_NOT_AUTHORIZED) {
+			log_message(ASL_LEVEL_WARNING, "_notify_lib_register_xpc_event failed with status %u\n", status);
+		}
+		return;
+	}
+
+	client_t *c = _nc_table_find_64(&global.notify_state.client_table, make_client_id(pid, token));
+	if (c == NULL) {
+		NOTIFY_INTERNAL_CRASH(0, "Can't find client after registering an event");
+	}
+
+	// Don't register_proc since PID is bogus
+	register_xpc_event(c, event_token);
+}
+
+void
+notifyd_matching_unregister(uint64_t event_token)
+{
+	client_t *c = cancel_xpc_event(event_token);
+	if (c == NULL) {
+		return; // if registration was denied, there wouldn't be anything to unregister
+	}
+
+	_notify_lib_cancel_client(&global.notify_state, c);
+}
 
 kern_return_t __notify_generate_common_port
 (
