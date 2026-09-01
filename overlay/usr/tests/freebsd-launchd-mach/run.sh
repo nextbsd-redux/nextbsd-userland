@@ -287,103 +287,18 @@ else
     exit 1
 fi
 
-# 6.5. fbsdglue iter 2 (#109 / #105a iter 2). Validates srclist-
-# fbsdglue.txt — 25 entries covering boot-critical kernel-bound
-# platform glue + ldd + HW/FS introspection + user mgmt + save-
-# entropy. The BSD-debug toolkit (fstat/sockstat/procstat/kdump/
-# ktrace/strings/top/vmstat/etc.) is DEFERRED per the srclist build
-# plan §9.6.6 iteration log — nothing in current CI uses them, and
-# they pull in FreeBSD privatelib prereqs (libsysdecode, libelftc,
-# libprocstat, libmemstat) that aren't load-bearing for the Apple-
-# repo ports that follow.
+# 6.5. fbsdglue -- REMOVED (nextbsd-userland#159).
 #
-# Per-binary check: file exists, is executable. Catches silent
-# install no-ops and unresolved-symbol rtld failures.
+# This was a file-existence checklist over 25 FreeBSD binaries from
+# srclist-fbsdglue.txt. It had already stopped gating on both ends:
+# boot-test.sh has no FBSDGLUE expect block at all, and the else arm here
+# was already neutered to `:` with the note "native FreeBSD-based image:
+# Apple-port check N/A, do not gate (was: exit 1)". build-arch.yml:219
+# records the same conclusion -- the FBSDGLUE, *-LEAF and PAM-* markers
+# "were dropped; those test Apple ports this image doesn't ship".
 #
-# Also confirms /rescue/ does NOT exist on the ISO.
-#
-# Plan: https://pkgdemon.github.io/freebsd-srclist-build-plan.html
-FBSDGLUE_FAIL=0
-# bin/ + sbin/ (kernel-bound + UFS):
-# NOTE: the kld* CLIs (kldload/kldunload/kldstat/kldconfig/kldxref) were
-# RETIRED (#193) — macOS ships kextload/kextstat, not kldload. The kld*(2)
-# SYSCALLS stay; kextload/kextstat (src/kext_tools) drive them. They are
-# asserted ABSENT below.
-for fbin in /bin/nextbsd-version /bin/kenv \
-            /sbin/devfs /sbin/fsck /sbin/fsck_ffs \
-            /sbin/ldconfig /sbin/mount /sbin/newfs /sbin/tunefs /sbin/umount; do
-    if [ ! -x "$fbin" ]; then
-        echo "FBSDGLUE-FAIL: $fbin missing or not executable"
-        ls -la "$fbin" 2>&1 || true
-        FBSDGLUE_FAIL=1
-    fi
-done
-# usr.bin/ldd is the one debug tool we keep — "why won't this .so
-# resolve" is the most common question during Apple-port work.
-if [ ! -x /usr/bin/ldd ]; then
-    echo "FBSDGLUE-FAIL: /usr/bin/ldd missing"
-    FBSDGLUE_FAIL=1
-fi
-# usr.sbin/ FreeBSD HW/FS introspection + user mgmt + libexec.
-# (kldxref retired with the rest of the kld* CLIs, #193 — linker.hints is
-# generated at build time, not on the image.)
-for fbin in /usr/sbin/devctl /usr/sbin/diskinfo \
-            /usr/sbin/fstyp /usr/sbin/gstat \
-            /usr/sbin/pciconf /usr/sbin/pw \
-            /usr/libexec/save-entropy; do
-    if [ ! -x "$fbin" ]; then
-        echo "FBSDGLUE-FAIL: $fbin missing or not executable"
-        ls -la "$fbin" 2>&1 || true
-        FBSDGLUE_FAIL=1
-    fi
-done
-# nologin can land at /sbin/ or /usr/sbin/ depending on Makefile
-# BINDIR; usr.sbin/nologin Makefile LINKs to /sbin/nologin too.
-if [ ! -x /sbin/nologin ] && [ ! -x /usr/sbin/nologin ]; then
-    echo "FBSDGLUE-FAIL: nologin missing from /sbin/ AND /usr/sbin/"
-    ls -la /sbin/nologin /usr/sbin/nologin 2>&1 || true
-    FBSDGLUE_FAIL=1
-fi
-# crashinfo is a shell script — check for presence + readability.
-if [ ! -r /usr/sbin/crashinfo ]; then
-    echo "FBSDGLUE-FAIL: /usr/sbin/crashinfo missing"
-    ls -la /usr/sbin/crashinfo 2>&1 || true
-    FBSDGLUE_FAIL=1
-fi
-# Verify /rescue/ absent (FreeBSD-rescue pkg dropped — Apple-shape).
-if [ -d /rescue ]; then
-    echo "FBSDGLUE-FAIL: /rescue/ still exists; FreeBSD-rescue should have been dropped"
-    ls -la /rescue 2>&1 | head -5 || true
-    FBSDGLUE_FAIL=1
-fi
-# Verify the kld* CLIs are ABSENT (#193) — macOS ships kextload/kextstat,
-# not kldload. The kld*(2) SYSCALLS stay (kextstat uses them); only the
-# user-space CLI front-ends are retired.
-for kldcli in /sbin/kldload /sbin/kldunload /sbin/kldstat \
-              /sbin/kldconfig /usr/sbin/kldxref; do
-    if [ -e "$kldcli" ]; then
-        echo "FBSDGLUE-FAIL: $kldcli still present; kld* CLIs should be retired (#193)"
-        ls -la "$kldcli" 2>&1 || true
-        FBSDGLUE_FAIL=1
-    fi
-done
-# Verify the kext* replacements ARE present.
-for kextcli in /usr/sbin/kextload /usr/sbin/kextunload /usr/sbin/kextstat; do
-    if [ ! -x "$kextcli" ]; then
-        echo "FBSDGLUE-FAIL: $kextcli missing; should replace the retired kld* CLI"
-        ls -la "$kextcli" 2>&1 || true
-        FBSDGLUE_FAIL=1
-    fi
-done
-if [ $FBSDGLUE_FAIL -eq 0 ]; then
-    # Sanity-probe a few: their output paths exit 0 quickly.
-    kextstat_count=$(kextstat 2>/dev/null | wc -l | tr -d ' ')
-    kenv_count=$(kenv 2>/dev/null | wc -l | tr -d ' ')
-    mount_count=$(mount 2>/dev/null | wc -l | tr -d ' ')
-    echo "FBSDGLUE-OK: fbsdglue binaries present + executable; kld* CLIs retired (kext* present); BSD-debug toolkit deferred; kextstat=${kextstat_count} kenv=${kenv_count} mount=${mount_count}; /rescue/ absent"
-else
-    : # native FreeBSD-based image: Apple-port check N/A, do not gate (was: exit 1)
-fi
+# So it emitted a marker nothing read, could not fail, and cost boot time
+# on every run. Removed rather than left as decoration.
 
 # 6.6. file_cmds iter 1+2+3+4 (#111 / #105b). Extends iter 1's
 # 5-binary leaf set to 18 pure-POSIX file_cmds tools (+ shar shell
