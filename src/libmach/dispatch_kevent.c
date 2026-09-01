@@ -1036,6 +1036,36 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 		    !(scratch_ev[i].flags & EV_ERROR))
 			continue;
 
+		/*
+		 * A native EVFILT_MACHPORT event is OURS. Its udata is the
+		 * struct mach_kev_reg * we registered the knote with (see the
+		 * EV_SET calls above), not a caller cookie -- so it must never
+		 * reach the caller. Only backlog_pop_locked() produces events
+		 * fit to hand out; it stamps the caller's own filter and udata.
+		 *
+		 * The lookup failing is not a reason to pass the event
+		 * through. It means the registration is already gone, which is
+		 * exactly when udata is a dangling pointer: reg_destroy() frees
+		 * r, and releasing the wrap pset makes the kernel fire EV_EOF
+		 * on the knote and mark it EV_ONESHOT (ipc_pset_destroy ->
+		 * knlist_clear). kqueue_scan then copies that kevent out
+		 * verbatim -- udata included -- without calling f_event.
+		 *
+		 * Falling through to kev_to_qos() here handed libdispatch a
+		 * kevent with filter -16 and udata pointing at freed memory.
+		 * _dispatch_kevent_get_unote() casts udata to a unote with no
+		 * validation and _dispatch_kevent_merge() dereferences it,
+		 * which crashed the dispatch manager thread roughly a third of
+		 * the time on teardown of any Mach recv source. Confirmed from
+		 * a core: filter -16, flags EV_EOF|EV_ONESHOT, and the "unote"
+		 * was a freed mach_kev_reg whose first word (the unlinked list
+		 * pointer) was NULL, so dux_type(du)->dst_action read 0x0+9.
+		 *
+		 * See nextbsd-userland#158. The trigger was #106, which turned
+		 * reg_release_pset() from a no-op -- mach_port_deallocate()
+		 * returns KERN_INVALID_RIGHT on a port set -- into a real
+		 * release, so this teardown path started running at all.
+		 */
 		if (scratch_ev[i].filter == EVFILT_MACHPORT_NATIVE) {
 			pthread_mutex_lock(&g_reg_mtx);
 			r = reg_find_by_wrap_pset_locked(
@@ -1050,11 +1080,10 @@ kevent_qos(int kq, const struct kevent_qos_s *changelist, int nchanges,
 				}
 			}
 			pthread_mutex_unlock(&g_reg_mtx);
+			continue;
 		}
-		if (r == NULL) {
-			kev_to_qos(&scratch_ev[i], &eventlist[filled]);
-			filled++;
-		}
+		kev_to_qos(&scratch_ev[i], &eventlist[filled]);
+		filled++;
 	}
 
 	if (ev_budget > KEVENT_STACK_SLOTS)

@@ -134,6 +134,37 @@ if [ ! -c /dev/iocatalogue ]; then
 	exit 0
 fi
 
+# Everything from here down — IOCATALOGUE, IOKIT-LOOKUP, KEXTD-LOAD,
+# EM-AUTOLOAD — asserts INTEL hardware kexts: IntelWiFi's 8260 personality
+# (0x24f38086) reaching the catalogue, the kernel matcher resolving that id,
+# kextd loading IntelWiFi on request, and IntelEthernet binding em0.
+#
+# nextbsd-kernel-modules publishes IntelWiFi and IntelEthernet as x86-64 builds
+# ONLY — there is no arm64 variant of either. So this group is amd64-only by
+# construction, twice over:
+#
+#   - the kexts do not exist for arm64, and shipping x86-64 drivers into an
+#     arm64 image purely to satisfy the assertions would be wrong;
+#   - arm64 qemu `virt` has no em(4) NIC at all — it is virtio-net (vtnet0) —
+#     so EM-AUTOLOAD has no device to bind even in principle.
+#
+# Emit the SKIP markers and the done-sentinel. boot-test.sh runs this section as
+# a pull model that ends on IOKIT-RUN-DONE: only an explicit *-FAIL gates, and
+# SKIP is informational. The gates ABOVE (IOREG, IOKITNOTIFY) are architecture-
+# independent and still run on arm64. See nextbsd-userland#163.
+case "$(uname -m)" in
+amd64|x86_64)
+	;;
+*)
+	echo "IOCATALOGUE-SKIP: IntelWiFi.kext is x86-64-only; no arm64 personalities to assert (nextbsd-userland#163)"
+	echo "IOKIT-LOOKUP-SKIP: no IntelWiFi personality on $(uname -m) to resolve"
+	echo "KEXTD-LOAD-SKIP: no arm64 IntelWiFi.kext build"
+	echo "EM-AUTOLOAD-SKIP: arm64 virt has no em(4) NIC (virtio-net) and IntelEthernet is x86-64-only"
+	echo "IOKIT-RUN-DONE"
+	exit 0
+	;;
+esac
+
 # kextd is now a boot-time launchd daemon (com.apple.kextd.plist, RunAtLoad,
 # K3b/#217) that registers HOST_KEXTD_PORT, pushes the repo personalities, and
 # serves load requests. We DO NOT push again here: a manual one-shot `kextd`
