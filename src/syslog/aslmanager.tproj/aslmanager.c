@@ -340,43 +340,48 @@ cli_main(int argc, char *argv[])
 
 
 
-#define ASLMANAGER_SERVICE_NAME "com.apple.aslmanager"
-
 /*
- * drain_launch_trigger — consume the demand-launch doorbell.
+ * run_managed — the launchd-managed path. Does not return.
  *
- * launchd starts this job when a message arrives on the
- * com.apple.aslmanager service port, and bootstrap_check_in() hands us the
- * receive right launchd holds for it. If we exit WITHOUT draining, the
- * message stays queued, mportset_callback() (runtime.c:541) sees a non-zero
- * mps_msgcount on the next pass and launches us again -- a respawn loop
- * bounded only by launchd's throttle. Draining is what makes exit safe.
+ * WHAT THIS RESTORES
  *
- * The message is a doorbell and nothing more. Apple's XPC listener ignored
- * the request dictionary too ("Some day, we may use the dictionary to pass
- * parameters to aslmanager, but for now, we ignore the input"), so there is
- * nothing to parse: the work is always cli_main().
+ * Apple's aslmanager branched on VPROC_GSK_IS_MANAGED: unmanaged ran cli_main()
+ * and exited, managed built an XPC listener on com.apple.aslmanager and called
+ * dispatch_main() -- so a managed aslmanager was demand-launched ONCE and then
+ * stayed resident for the life of the boot, servicing triggers in place. That
+ * is still how it behaves on macOS today: `ps` shows aslmanager up from boot,
+ * from a plist with no RunAtLoad, no KeepAlive and no StartInterval.
  *
- * Non-fatal throughout. A failed check-in means we were started some other
- * way -- by hand, or from the command line -- which is a normal way to run
- * this tool, and the rotation work is still correct. MACH_RCV_TIMEOUT with a
- * zero timeout means we never block: we take what is queued and leave.
+ * #143 deleted that branch along with the XPC it was written in, and #164
+ * replaced it with drain-work-exit. Both lost the residency. This restores it
+ * in the transport that was underneath XPC all along.
+ *
+ * WHY BARE MACH AND NOT XPC
+ *
+ * launchd demand-launches on a MACH message; XPC was only the envelope Apple
+ * wrapped that in for 10.9. Dropping the envelope removes libxpc (#152) and,
+ * more importantly, libdispatch from this path: dispatch_main() and
+ * xpc_connection_* both route through our libdispatch, whose dispatch_async
+ * SIGSEGVs in dx_push from arbitrary pthreads (asl_action.c:1765). A plain
+ * blocking mach_msg() receive loop has neither problem, and is the same shape
+ * notifyd already uses in this tree.
+ *
+ * COALESCING
+ *
+ * After each wakeup we drain whatever else is queued before working. Apple did
+ * the same thing with main_task()'s enqueue/delay machinery -- a burst of
+ * triggers should produce one rotation pass, not one per message. Rotation is
+ * idempotent, so the only cost of a missed coalesce is wasted work.
  */
 static void
-drain_launch_trigger(void)
+run_managed(mach_port_t port)
 {
-	mach_port_t port = MACH_PORT_NULL;
 	kern_return_t kr;
-	int drained = 0;
+	int drained;
 
-	kr = bootstrap_check_in(bootstrap_port, ASLMANAGER_SERVICE_NAME, &port);
-	if (kr != KERN_SUCCESS)
-	{
-		fprintf(stderr, "aslmanager: bootstrap_check_in(%s) = %d; not "
-		    "demand-launched, running the rotation anyway\n",
-		    ASLMANAGER_SERVICE_NAME, (int)kr);
-		return;
-	}
+	fprintf(stderr, "ASLMANAGER-RESIDENT: pid=%d listening on %s\n",
+	    (int)getpid(), ASLMANAGER_SERVICE_NAME);
+	fflush(stderr);
 
 	for (;;)
 	{
@@ -385,50 +390,85 @@ drain_launch_trigger(void)
 			char buf[1024];
 		} m;
 
-		kr = mach_msg(&m.hdr, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
-		    (mach_msg_size_t)sizeof(m), port, 0, MACH_PORT_NULL);
-		if (kr != KERN_SUCCESS) break;
-
-		drained++;
+		/*
+		 * Block indefinitely. This is the whole point: the process stays
+		 * alive between triggers instead of exiting and making launchd
+		 * fork a new one per rotation. launchd stops us with SIGTERM at
+		 * shutdown, and EnablePressuredExit in the plist lets it reclaim
+		 * us under memory pressure.
+		 */
+		kr = mach_msg(&m.hdr, MACH_RCV_MSG, 0, (mach_msg_size_t)sizeof(m),
+		    port, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+		if (kr != KERN_SUCCESS)
+		{
+			/*
+			 * A receive error on our own service port is not something
+			 * we can recover from by looping -- that would spin. Log
+			 * and exit; launchd will demand-launch a fresh instance on
+			 * the next trigger.
+			 */
+			fprintf(stderr, "aslmanager: mach_msg(RCV) failed kr=0x%x; "
+			    "exiting\n", (unsigned)kr);
+			fflush(stderr);
+			return;
+		}
 		mach_msg_destroy(&m.hdr);
-	}
 
-	/*
-	 * This line IS the probe's evidence. StandardErrorPath in the plist
-	 * routes it to /var/log/aslmanager.stderr, which the boot suite reads:
-	 * `launchctl list` cannot answer "did this job ever run", because
-	 * job_export() (core.c:1095) always inserts LastExitStatus, so a job
-	 * that never ran prints the same "-  0" as one that exited cleanly.
-	 */
-	fprintf(stderr, "ASLMANAGER-DEMAND-LAUNCHED: service=%s pid=%d "
-	    "drained=%d last_kr=0x%x\n", ASLMANAGER_SERVICE_NAME, (int)getpid(),
-	    drained, (unsigned)kr);
-	fflush(stderr);
+		/* Coalesce a burst: take everything already queued. */
+		drained = 1;
+		for (;;)
+		{
+			union {
+				mach_msg_header_t hdr;
+				char buf[1024];
+			} extra;
+
+			kr = mach_msg(&extra.hdr, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
+			    (mach_msg_size_t)sizeof(extra), port, 0, MACH_PORT_NULL);
+			if (kr != KERN_SUCCESS) break;
+			mach_msg_destroy(&extra.hdr);
+			drained++;
+		}
+
+		fprintf(stderr, "ASLMANAGER-TRIGGERED: pid=%d coalesced=%d\n",
+		    (int)getpid(), drained);
+		fflush(stderr);
+
+		(void)cli_main(0, NULL);
+	}
 }
 
 int
 main(int argc, char *argv[])
 {
-	/*
-	 * Periodic model (nextbsd-userland#143), now demand-launched again.
-	 *
-	 * This used to branch on VPROC_GSK_IS_MANAGED: unmanaged ran cli_main()
-	 * and exited, managed set up an XPC listener on com.apple.aslmanager and
-	 * called dispatch_main() forever, doing work only when a client sent a
-	 * message. The client half was asl_trigger_aslmanager() in
-	 * libsystem_asl, a synchronous XPC round-trip -- which is what stalled
-	 * syslogd for 30s on the boot path before it bound /var/run/log (#87).
-	 *
-	 * The XPC halves stay gone. What comes back is the launchd mechanism
-	 * underneath them, which was never XPC: launchd demand-launches on a
-	 * MACH message, and #143 discarded that along with the envelope. We
-	 * drain the doorbell, do the work, and exit -- no listener, no
-	 * dispatch_main(), no libxpc, and no libdispatch on this path (our
-	 * dispatch_async SIGSEGVs from arbitrary pthreads, asl_action.c:1765).
-	 */
+	mach_port_t port = MACH_PORT_NULL;
+	kern_return_t kr;
+
 	setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_THROTTLE);
 
-	drain_launch_trigger();
+	/*
+	 * Managed or not? Apple asked vproc_swap_integer(VPROC_GSK_IS_MANAGED);
+	 * checking in for the service answers the same question more directly
+	 * and with the thing we actually need. bootstrap_check_in() only
+	 * succeeds for the job that DECLARES the service in its plist, so
+	 * success means "launchd started us for com.apple.aslmanager" and hands
+	 * us the receive right in one step.
+	 *
+	 * Failure means someone ran /usr/sbin/aslmanager from a shell. That must
+	 * keep working -- it is how the tool is used by hand and by aslmanager(8)
+	 * -- so fall through to the one-shot CLI, which is what unmanaged did on
+	 * Apple too.
+	 */
+	kr = bootstrap_check_in(bootstrap_port, ASLMANAGER_SERVICE_NAME, &port);
+	if (kr == KERN_SUCCESS && port != MACH_PORT_NULL)
+	{
+		run_managed(port);	/* only returns on an unrecoverable error */
+		return 0;
+	}
+
+	fprintf(stderr, "aslmanager: bootstrap_check_in(%s) = %d; running one-shot\n",
+	    ASLMANAGER_SERVICE_NAME, (int)kr);
+	fflush(stderr);
 
 	return cli_main(argc, argv);
 }

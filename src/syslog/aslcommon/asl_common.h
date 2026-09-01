@@ -36,6 +36,20 @@
 
 #define ASL_SERVICE_NAME "com.apple.system.logger"
 
+/*
+ * aslmanager's launchd MachServices name, and the id of the one-way "doorbell"
+ * message sent to it. Shared so the client (asl_trigger_aslmanager() in
+ * libsystem_asl) and the server (aslmanager's Mach listener) cannot drift.
+ *
+ * The message carries no payload. Apple's XPC listener ignored the request
+ * dictionary too -- "Some day, we may use the dictionary to pass parameters to
+ * aslmanager, but for now, we ignore the input" -- so the id exists only to
+ * make a stray message obviously ours in a trace. It is kept out of the MIG
+ * range (0..999999) for that reason.
+ */
+#define ASLMANAGER_SERVICE_NAME "com.apple.aslmanager"
+#define ASLMANAGER_TRIGGER_MSG_ID 0x41534c4d	/* 'ASLM' */
+
 #define CRASH_MOVER_WILL_START_NOTIFICATION  "CrashMoverWillStart"
 
 #define SECONDS_PER_DAY 86400

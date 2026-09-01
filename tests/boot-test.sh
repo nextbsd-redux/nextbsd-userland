@@ -1375,15 +1375,14 @@ expect {
 # PAM is exercised by login succeeding — every marker above only fires
 # after login completes through /etc/pam.d/login.
 
-# ASLMANAGER-DEMAND — #143 follow-up discovery probe: does launchd
-# demand-launch a MachServices job now that #83 replaced the two stubs #79
-# blamed (mach_port_get_set_status / mach_port_get_attributes, which made
-# mportset_callback() an unconditional no-op)? NON-FATAL — every outcome is
-# reported, none gates the build. The answer decides how aslmanager is driven:
-# demand launch if this passes, or a WatchPaths port from launchd-392.39 into
-# core.c (~200 lines in PID 1) if it does not. Same shape as the
-# EVFILT-MACHPORT probe above, and for the same reason: we want the result
-# recorded, not the lane turned red while we are still asking the question.
+# ASLMANAGER-DEMAND — does the RESIDENT aslmanager service a doorbell IN PLACE?
+# The discovery question this started as (#164: does launchd demand-launch a
+# MachServices job at all, now that #83 fixed the stubs #79 blamed?) is settled
+# — it does, on both arches. What is left is the property a liveness check
+# cannot see: that the trigger is handled by the RUNNING process, with its pid
+# unchanged. A new pid means it exited and launchd forked a replacement, i.e.
+# residency is broken. NON-FATAL here because DAEMON-STATE below is the gate on
+# aslmanager being up; this only qualifies HOW it is up.
 expect {
     timeout {
         puts "\nWARN: ASLMANAGER-DEMAND marker not seen (pre-#143-follow-up run.sh — informational)"
@@ -1392,10 +1391,10 @@ expect {
         puts "\nWARN: ASLMANAGER-DEMAND-SKIP — probe or job not present on this image"
     }
     "ASLMANAGER-DEMAND-FAIL" {
-        puts "\nWARN: ASLMANAGER-DEMAND-FAIL — launchd did NOT demand-launch aslmanager; the WatchPaths port into core.c is the remaining option"
+        puts "\nWARN: ASLMANAGER-DEMAND-FAIL — the resident aslmanager did not service the doorbell in place (DAEMON-STATE below is the gate on it being up at all)"
     }
     "ASLMANAGER-DEMAND-OK" {
-        puts "\nOK: launchd demand-launched aslmanager on a Mach message — #143 can be reverted to demand launch, no PID-1 change needed"
+        puts "\nOK: resident aslmanager serviced a trigger in place, same pid — residency holds"
     }
 }
 # DAEMON-STATE — every LaunchDaemon held to the contract its own plist
