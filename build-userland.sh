@@ -928,6 +928,15 @@ $TCC -fblocks -o "$TESTDIR/test_corefoundation" "$SRC/libCoreFoundation-tests/te
 # lives in tests/ (build.sh ~1076). No Darwin libs needed.
 $TCC -o "$TESTDIR/test_bsd_logger" "$ROOT/tests/test_bsd_logger.c"
 
+# test_demand_launch (ASLMANAGER-DEMAND marker): bootstrap_look_up + one-way
+# mach_msg to a MachServices job, to find out whether launchd demand-launch
+# works now that #83 replaced the two stubs #79 blamed. -llaunch for
+# bootstrap_look_up/bootstrap_port, -lsystem_kernel for mach_msg; same
+# dispatch closure as notifypoke because liblaunch.so is linked
+# --no-allow-shlib-undefined.
+$TCC -o "$TESTDIR/test_demand_launch" "$ROOT/tests/test_demand_launch.c" \
+    -llaunch -lsystem_dispatch -lsystem_kernel -l:libsystem_blocks.so
+
 # notifypoke — posts one notification, so the #91 lost-wakeup test can wake
 # notifyd on demand. Deliberately NOT logger(1): that posts to syslogd via
 # /var/run/log and never reaches notifyd, which made the first version of that

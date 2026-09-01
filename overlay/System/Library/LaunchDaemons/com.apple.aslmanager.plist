@@ -11,25 +11,45 @@
 		<string>aslmanager</string>
 	</array>
 	<!--
-	     Driven by StartInterval, not by an XPC trigger (nextbsd-userland#143).
+	     DEMAND-LAUNCH PROBE (nextbsd-userland#143 follow-up).
 
-	     This job used to declare MachServices com.apple.aslmanager and be
-	     demand-launched by asl_trigger_aslmanager(), a synchronous XPC
-	     round-trip from libsystem_asl. syslogd reaches that call from
-	     write_boot_log() before it binds /var/run/log, so when aslmanager did
-	     not answer the system had no logging for the 30s XPC timeout (#87).
+	     #143 replaced MachServices with StartInterval 3600 and stubbed
+	     asl_trigger_aslmanager() to a no-op. StartInterval only arms an
+	     EVFILT_TIMER (core.c:2885) -- there is no dispatch at load -- so
+	     aslmanager does not run for the first hour of any boot, and the
+	     trigger that used to start it is gone. That is why it never runs.
 
-	     Both halves are removed. Store rotation is advisory and latency
-	     tolerant -- the ASL store is trimmed by size and age, so running it
-	     hourly rather than on demand only delays trimming, it does not lose
-	     data. This is what the pre-XPC design did.
+	     This restores MachServices so launchd demand-launches the job, and
+	     exists to answer one question in CI: does on-demand Mach-service
+	     launch work now? When #143 removed it the answer was no, but the
+	     two stubs behind that (#79: mach_port_get_set_status and
+	     mach_port_get_attributes) were fixed by #83 on 08-29, and #78's
+	     syslogd deadlock on 08-31 -- all BEFORE #143 landed at 08-31 22:56.
+	     Nothing re-tested the path afterwards.
+
+	     The boot-path stall #87 describes is NOT reintroduced: the call
+	     site that caused it was removed separately by 3d3e575, 99 minutes
+	     before #143, and stays removed (dbserver.c:152).
+
+	     StandardErrorPath is the observable signal. launchd creates the
+	     file when it spawns the job, and `launchctl list` cannot be used
+	     for this -- job_export() (core.c:1095) always inserts
+	     LastExitStatus, so a job that never ran and a job that exited 0
+	     both print "-  0  com.apple.aslmanager".
+
+	     EnableTransactions / EnablePressuredExit are dropped: both were
+	     for the resident XPC listener that #143 deleted. aslmanager does
+	     the work and exits.
 	-->
-	<key>StartInterval</key>
-	<integer>3600</integer>
-	<key>EnableTransactions</key>
-	<true/>
-	<key>EnablePressuredExit</key>
-	<true/>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.aslmanager</key>
+		<true/>
+	</dict>
+	<key>StandardErrorPath</key>
+	<string>/var/log/aslmanager.stderr</string>
+	<key>StandardOutPath</key>
+	<string>/var/log/aslmanager.stderr</string>
 	<key>POSIXSpawnType</key>
 	<string>Interactive</string>
 </dict>

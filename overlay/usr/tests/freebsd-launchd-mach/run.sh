@@ -1965,6 +1965,84 @@ echo "--- end hostnamed.stderr ---"
 # script dumps the daemon's kernel stacks, every process blocked in Mach, and
 # the daemon's stderr tail -- the evidence that otherwise takes a day to
 # assemble by hand.
+# ------------------------------------------------------ demand launch --
+# ASLMANAGER-DEMAND — #143 follow-up discovery probe. NON-FATAL: every
+# outcome is reported, none gates the build. Placed after the stress rounds
+# deliberately, so it also answers "does demand launch still work once the
+# box has been hammered", not only "does it work on an idle boot".
+#
+# The question: does launchd demand-launch a MachServices job today? #143
+# replaced aslmanager's MachServices with StartInterval 3600 because the
+# demand path was dead (#79: mach_port_get_set_status and
+# mach_port_get_attributes were both stubs, so mportset_callback() was an
+# unconditional no-op). #83 replaced those stubs on 08-29 and #143 landed
+# 08-31 22:56 -- nothing re-tested the path in between.
+#
+# StartInterval is NOT a substitute: it only arms an EVFILT_TIMER
+# (core.c:2885), with no dispatch at load, so aslmanager did not run for the
+# first hour of any boot and the trigger that used to start it was gone.
+#
+# Evidence is /var/log/aslmanager.stderr, NOT `launchctl list`. job_export()
+# (core.c:1095) always inserts LastExitStatus, so a job that never ran and a
+# job that exited 0 both print "-  0  com.apple.aslmanager" -- the same blind
+# spot that let #78 show "13 jobs all at status 0 with syslog completely
+# dead". launchd creates the StandardErrorPath file when it SPAWNS the job,
+# so the file appearing is proof of a launch on its own.
+echo "==> aslmanager demand-launch probe (#143 follow-up)"
+asl_stderr=/var/log/aslmanager.stderr
+demand_probe=/usr/tests/freebsd-launchd-mach/test_demand_launch
+
+if [ ! -x "$demand_probe" ]; then
+    echo "ASLMANAGER-DEMAND-SKIP: test_demand_launch not installed"
+elif ! launchctl list 2>/dev/null | awk '$3 == "com.apple.aslmanager" { f = 1 } END { exit !f }'; then
+    echo "--- launchctl list | grep aslmanager ---"
+    launchctl list 2>/dev/null | grep -i aslmanager || echo "(not in launchctl list)"
+    echo "ASLMANAGER-DEMAND-SKIP: com.apple.aslmanager is not loaded"
+else
+    # Baseline. -c is bytes; a job launched earlier in this boot would
+    # already have written its marker, and that still counts as a launch.
+    if [ -f "$asl_stderr" ]; then
+        asl_before=$(wc -c < "$asl_stderr" 2>/dev/null || echo 0)
+    else
+        asl_before=absent
+    fi
+    echo "    before: $asl_stderr = $asl_before"
+
+    "$demand_probe" com.apple.aslmanager
+    probe_rc=$?
+
+    # Poll rather than sleep once: launchd has to notice the queued message,
+    # fork, exec, and let aslmanager reach its check-in. 15s is generous for
+    # that on a TCG guest and bounded either way.
+    demand_seen=0
+    i=0
+    while [ "$i" -lt 15 ]; do
+        if grep -q "ASLMANAGER-DEMAND-LAUNCHED" "$asl_stderr" 2>/dev/null; then
+            demand_seen=1
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+
+    echo "--- $asl_stderr ---"
+    cat "$asl_stderr" 2>/dev/null || echo "(file does not exist)"
+    echo "--- launchctl list | grep aslmanager ---"
+    launchctl list 2>/dev/null | grep -i aslmanager || echo "(not listed)"
+    echo "--- pgrep -fl aslmanager ---"
+    pgrep -fl aslmanager || echo "(no aslmanager process right now — expected; it runs and exits)"
+    echo "--- /var/log/asl ---"
+    ls -la /var/log/asl/ 2>/dev/null || echo "(no ASL store — expected while /etc/asl.conf is not installed)"
+
+    if [ "$demand_seen" -eq 1 ]; then
+        echo "ASLMANAGER-DEMAND-OK: launchd demand-launched aslmanager on a Mach message after ${i}s"
+    elif [ "$probe_rc" -ne 0 ]; then
+        echo "ASLMANAGER-DEMAND-FAIL: probe could not deliver the doorbell (rc=$probe_rc) — see DEMAND-LOOKUP/DEMAND-SEND markers above"
+    else
+        echo "ASLMANAGER-DEMAND-FAIL: doorbell delivered but aslmanager never launched within 15s"
+    fi
+fi
+
 echo "==> Mach service wedge check"
 if [ -x /usr/tests/freebsd-launchd-mach/wedge-check.sh ]; then
     /usr/tests/freebsd-launchd-mach/wedge-check.sh 15 || true
