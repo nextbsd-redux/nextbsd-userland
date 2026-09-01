@@ -22,6 +22,7 @@
  */
 
 #include <string.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -313,11 +314,23 @@ asl_syslog_faciliy_num_to_name(int n)
 	return NULL;
 }
 
+
+static pthread_once_t aslmgr_conn_once = PTHREAD_ONCE_INIT;
+static xpc_connection_t aslmgr_conn = NULL;
+
+static void
+_asl_trigger_conn_init(void)
+{
+	aslmgr_conn = xpc_connection_create_mach_service(ASLMANAGER_SERVICE_NAME,
+	    NULL, 0);
+	if (aslmgr_conn != NULL)
+		xpc_connection_resume(aslmgr_conn);
+}
+
 int
 asl_trigger_aslmanager(void)
 {
-	xpc_connection_t conn;
-	xpc_object_t msg, reply;
+	xpc_object_t msg;
 
 	/*
 	 * Poke the aslmanager Mach service so launchd demand-launches it and
@@ -346,23 +359,38 @@ asl_trigger_aslmanager(void)
 	 * Advisory: a failed trigger only defers rotation, so every error path
 	 * returns success. The periodic job remains as a timer backstop.
 	 */
-	conn = xpc_connection_create_mach_service(ASLMANAGER_SERVICE_NAME,
-	    NULL, 0);
-	if (conn == NULL)
+	/*
+	 * Send WITHOUT waiting for a reply (nextbsd-userland#87).
+	 *
+	 * This is called from db_asl_open(), which syslogd reaches from
+	 * write_boot_log() -- before it has bound /var/run/log. The reply-sync
+	 * form blocks for XPC_SYNC_REPLY_TIMEOUT_NSEC (30s) when aslmanager does
+	 * not answer, and aslmanager is demand-launched by launchd, so early in
+	 * boot it frequently does not. On amd64 that is exactly where syslogd
+	 * stalls: the boot trace ends at "before asl_trigger_aslmanager" with the
+	 * ASL store already opened (status=0), no /var/run/log, and no logging at
+	 * all for the duration.
+	 *
+	 * Waiting buys nothing. The trigger is advisory -- every error path here
+	 * already returns success, and the comment above notes the periodic job
+	 * remains as a timer backstop. A missed trigger defers store rotation; a
+	 * 30s stall on the boot path costs the system its logging.
+	 *
+	 * The connection is created once and deliberately never released. It
+	 * cannot be released right after an async send: xpc_connection_send_message()
+	 * dispatch_async()es a block that captures the connection, so releasing
+	 * here would free it out from under that block. One connection per process,
+	 * for the process lifetime, is the cost.
+	 */
+	pthread_once(&aslmgr_conn_once, _asl_trigger_conn_init);
+	if (aslmgr_conn == NULL)
 		return 0;
 
 	msg = xpc_dictionary_create(NULL, NULL, 0);
-	if (msg == NULL) {
-		xpc_release(conn);
+	if (msg == NULL)
 		return 0;
-	}
 
-	xpc_connection_resume(conn);
-	reply = xpc_connection_send_message_with_reply_sync(conn, msg);
-
-	if (reply != NULL)
-		xpc_release(reply);
+	xpc_connection_send_message(aslmgr_conn, msg);
 	xpc_release(msg);
-	xpc_release(conn);
 	return 0;
 }
