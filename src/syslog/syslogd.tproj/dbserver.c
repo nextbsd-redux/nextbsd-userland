@@ -147,7 +147,38 @@ db_asl_open(uint32_t dbtype)
 		else
 		{
 			if (global.db_file_max != 0) asl_store_max_file_size(global.file_db, global.db_file_max);
-			asl_trigger_aslmanager();
+
+			/*
+			 * asl_trigger_aslmanager() deliberately NOT called here
+			 * (nextbsd-userland#87).
+			 *
+			 * It performs a synchronous XPC round-trip
+			 * (asl_util.c:361) to aslmanager, which launchd
+			 * demand-launches. When aslmanager does not answer, that
+			 * waits XPC_SYNC_REPLY_TIMEOUT_NSEC -- 30 seconds.
+			 *
+			 * This is the first store open, which syslogd reaches
+			 * from write_boot_log() BEFORE it binds /var/run/log. The
+			 * amd64 boot trace ends at "before asl_trigger_aslmanager"
+			 * with the store already opened (status=0): no socket, no
+			 * system.log, no logging at all while it waits.
+			 *
+			 * Nothing is lost by not calling it. The trigger is
+			 * advisory -- asl_util.c:346 records that every error path
+			 * returns success and "the periodic job remains as a timer
+			 * backstop" -- and the two remaining callers fire only when
+			 * rotation is actually warranted, neither on the boot path:
+			 *
+			 *   asl_action.c:651   if (status == 1) after a checkpoint test
+			 *   asl_store.c:670    if (trigger_aslmanager != 0)
+			 *
+			 * The transport is deliberately untouched. An earlier
+			 * attempt (PR #139) switched this call to the async
+			 * xpc_connection_send_message(), which dispatch_async()es
+			 * from syslogd's bsd_in recv pthread -- the pattern
+			 * asl_action.c:1765 documents as SIGSEGVing. It killed
+			 * syslogd outright.
+			 */
 		}
 	}
 
