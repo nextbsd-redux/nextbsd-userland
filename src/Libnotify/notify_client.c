@@ -1966,7 +1966,6 @@ _notification_introspection_init(notify_globals_t globals)
 	__block size_t num_exempt_notifications = 0;
 
 	bool enabled = check_entitlement(INTROSPECTION_ENTITLEMENT);
-	});
 
 	struct _notify_introspect_s *introspect = &globals->introspect;
 	introspect->enabled = enabled;
