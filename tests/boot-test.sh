@@ -1375,6 +1375,29 @@ expect {
 # PAM is exercised by login succeeding — every marker above only fires
 # after login completes through /etc/pam.d/login.
 
+# ASLMANAGER-DEMAND — #143 follow-up discovery probe: does launchd
+# demand-launch a MachServices job now that #83 replaced the two stubs #79
+# blamed (mach_port_get_set_status / mach_port_get_attributes, which made
+# mportset_callback() an unconditional no-op)? NON-FATAL — every outcome is
+# reported, none gates the build. The answer decides how aslmanager is driven:
+# demand launch if this passes, or a WatchPaths port from launchd-392.39 into
+# core.c (~200 lines in PID 1) if it does not. Same shape as the
+# EVFILT-MACHPORT probe above, and for the same reason: we want the result
+# recorded, not the lane turned red while we are still asking the question.
+expect {
+    timeout {
+        puts "\nWARN: ASLMANAGER-DEMAND marker not seen (pre-#143-follow-up run.sh — informational)"
+    }
+    "ASLMANAGER-DEMAND-SKIP" {
+        puts "\nWARN: ASLMANAGER-DEMAND-SKIP — probe or job not present on this image"
+    }
+    "ASLMANAGER-DEMAND-FAIL" {
+        puts "\nWARN: ASLMANAGER-DEMAND-FAIL — launchd did NOT demand-launch aslmanager; the WatchPaths port into core.c is the remaining option"
+    }
+    "ASLMANAGER-DEMAND-OK" {
+        puts "\nOK: launchd demand-launched aslmanager on a Mach message — #143 can be reverted to demand launch, no PID-1 change needed"
+    }
+}
 # Wait for the launchd-mach run.sh to FINISH (its FreeBSD PAM tail was removed —
 # not a Darwin/Mach component) before starting the IOKit script, so the IOKit
 # run.sh isn't queued behind it. This is the pull model's sequencing barrier:

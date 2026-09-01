@@ -28,6 +28,9 @@
 #include <errno.h>
 #include <vproc_priv.h>
 #include <os/transaction_private.h>
+#include <mach/mach.h>
+#include <servers/bootstrap.h>
+#include <unistd.h>
 
 #include "asl_common.h"
 #include "daemon.h"
@@ -337,11 +340,77 @@ cli_main(int argc, char *argv[])
 
 
 
+#define ASLMANAGER_SERVICE_NAME "com.apple.aslmanager"
+
+/*
+ * drain_launch_trigger — consume the demand-launch doorbell.
+ *
+ * launchd starts this job when a message arrives on the
+ * com.apple.aslmanager service port, and bootstrap_check_in() hands us the
+ * receive right launchd holds for it. If we exit WITHOUT draining, the
+ * message stays queued, mportset_callback() (runtime.c:541) sees a non-zero
+ * mps_msgcount on the next pass and launches us again -- a respawn loop
+ * bounded only by launchd's throttle. Draining is what makes exit safe.
+ *
+ * The message is a doorbell and nothing more. Apple's XPC listener ignored
+ * the request dictionary too ("Some day, we may use the dictionary to pass
+ * parameters to aslmanager, but for now, we ignore the input"), so there is
+ * nothing to parse: the work is always cli_main().
+ *
+ * Non-fatal throughout. A failed check-in means we were started some other
+ * way -- by hand, or from the command line -- which is a normal way to run
+ * this tool, and the rotation work is still correct. MACH_RCV_TIMEOUT with a
+ * zero timeout means we never block: we take what is queued and leave.
+ */
+static void
+drain_launch_trigger(void)
+{
+	mach_port_t port = MACH_PORT_NULL;
+	kern_return_t kr;
+	int drained = 0;
+
+	kr = bootstrap_check_in(bootstrap_port, ASLMANAGER_SERVICE_NAME, &port);
+	if (kr != KERN_SUCCESS)
+	{
+		fprintf(stderr, "aslmanager: bootstrap_check_in(%s) = %d; not "
+		    "demand-launched, running the rotation anyway\n",
+		    ASLMANAGER_SERVICE_NAME, (int)kr);
+		return;
+	}
+
+	for (;;)
+	{
+		union {
+			mach_msg_header_t hdr;
+			char buf[1024];
+		} m;
+
+		kr = mach_msg(&m.hdr, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
+		    (mach_msg_size_t)sizeof(m), port, 0, MACH_PORT_NULL);
+		if (kr != KERN_SUCCESS) break;
+
+		drained++;
+		mach_msg_destroy(&m.hdr);
+	}
+
+	/*
+	 * This line IS the probe's evidence. StandardErrorPath in the plist
+	 * routes it to /var/log/aslmanager.stderr, which the boot suite reads:
+	 * `launchctl list` cannot answer "did this job ever run", because
+	 * job_export() (core.c:1095) always inserts LastExitStatus, so a job
+	 * that never ran prints the same "-  0" as one that exited cleanly.
+	 */
+	fprintf(stderr, "ASLMANAGER-DEMAND-LAUNCHED: service=%s pid=%d "
+	    "drained=%d last_kr=0x%x\n", ASLMANAGER_SERVICE_NAME, (int)getpid(),
+	    drained, (unsigned)kr);
+	fflush(stderr);
+}
+
 int
 main(int argc, char *argv[])
 {
 	/*
-	 * Periodic model (nextbsd-userland#143).
+	 * Periodic model (nextbsd-userland#143), now demand-launched again.
 	 *
 	 * This used to branch on VPROC_GSK_IS_MANAGED: unmanaged ran cli_main()
 	 * and exited, managed set up an XPC listener on com.apple.aslmanager and
@@ -350,15 +419,16 @@ main(int argc, char *argv[])
 	 * libsystem_asl, a synchronous XPC round-trip -- which is what stalled
 	 * syslogd for 30s on the boot path before it bound /var/run/log (#87).
 	 *
-	 * Both halves are gone. aslmanager is now driven by StartInterval in
-	 * com.apple.aslmanager.plist, which is what the pre-XPC design did, so
-	 * managed and unmanaged behave identically: do the work, exit.
-	 *
-	 * main_task()'s enqueue/delay machinery went with it -- it existed to
-	 * coalesce bursts of XPC triggers, and all it ever did was schedule
-	 * cli_main(0, NULL) on work_queue.
+	 * The XPC halves stay gone. What comes back is the launchd mechanism
+	 * underneath them, which was never XPC: launchd demand-launches on a
+	 * MACH message, and #143 discarded that along with the envelope. We
+	 * drain the doorbell, do the work, and exit -- no listener, no
+	 * dispatch_main(), no libxpc, and no libdispatch on this path (our
+	 * dispatch_async SIGSEGVs from arbitrary pthreads, asl_action.c:1765).
 	 */
 	setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_THROTTLE);
+
+	drain_launch_trigger();
 
 	return cli_main(argc, argv);
 }
