@@ -199,7 +199,25 @@ fi
 # (IOCATIOCTESTSEND -> the kernel sends to the running daemon over HOST_KEXTD_PORT)
 # and confirm IntelWiFi kldloaded. This is the full auto-load path minus the
 # physical device (the 8260 bind is the t420 test).
-if [ -x /usr/libexec/kextd ]; then
+# KEXTD-LOAD asserts kextd loads IntelWiFi on a kernel request. IntelWiFi.kext
+# ships as an x86-64 build only -- nextbsd-kernel-modules publishes no arm64
+# variant -- so on arm64 the kldload always fails with ENOEXEC ("Exec format
+# error") and this can never pass there. Skipped on arm64 pending
+# nextbsd-userland#163; the injected request is synthetic (no physical device),
+# so the sole blocker is the missing arm64 build.
+#
+# The IOCATALOGUE checks above still run on arm64 and MUST: IOCatalogue
+# populates from Info.plist personalities, which are architecture-independent,
+# so IntelWiFi's match table lands in the catalogue on arm64 from the very
+# bundle that cannot load.
+case "$(uname -m)" in
+amd64|x86_64)	kextd_load_supported=yes ;;
+*)		kextd_load_supported=no ;;
+esac
+
+if [ "$kextd_load_supported" = no ]; then
+	echo "KEXTD-LOAD-SKIP: no arm64 IntelWiFi.kext build (nextbsd-userland#163)"
+elif [ -x /usr/libexec/kextd ]; then
 	pgrep -f "kextd -w" >/dev/null 2>&1 && echo "kextd -w daemon is running" \
 	    || echo "WARN: kextd -w daemon not found running"
 	/usr/libexec/kextd -t 0x24f38086 || true	# inject a load request

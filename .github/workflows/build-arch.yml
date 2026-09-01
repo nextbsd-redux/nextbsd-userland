@@ -169,9 +169,50 @@ jobs:
           mkdir -p art
           gh release download continuous -R nextbsd-redux/nextbsd-kernel \
             --pattern 'nextbsd-kernel-${{ inputs.arch }}.tar.gz' --dir art --clobber
+          # Kext tarballs are per-arch, but the release also carries legacy
+          # UNSUFFIXED ones that are x86-64 builds. assemble-image.sh extracts
+          # every tarball into the same /System/Library/Extensions in `ls`
+          # order, so last wins -- and graphics-kexts.tar.gz sorts AFTER
+          # graphics-kexts-arm64.tar.gz. An unfiltered '*kext*.tar.gz' laid
+          # x86-64 objects over arm64's, and arm64 kldload'd them with "Exec
+          # format error". Filter by arch; take the unsuffixed x86-64 ones only
+          # on amd64, where they are the correct architecture.
           gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
-            --pattern '*kext*.tar.gz' --dir art --clobber || true
+            --pattern "*kext*-${ARCH}.tar.gz" --dir art --clobber || true
+          if [ "$ARCH" = amd64 ]; then
+            for p in graphics-kexts.tar.gz intelethernet-kext.tar.gz \
+                     intelwifi-kext.tar.gz nvidia-kexts.tar.gz; do
+              gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+                --pattern "$p" --dir art --clobber || true
+            done
+          elif [ -f art/graphics-kexts-arm64.tar.gz ]; then
+            # arm64 ships its real kexts -- IOGraphics, TTM, DMABuf,
+            # LinuxVirtIO, IOGraphicsShmem, IOGraphicsExtras -- minus
+            # VirtIOGraphics.kext ONLY. nextbsd-kernel#170.
+            #
+            # That one bundle cannot ship yet. The IOKit catalogue asks for it
+            # whenever it sees an attached vtgpu (iocat_vtgpu_shadowed() reads
+            # that as "console yes, KMS no, kext wanted"), and its DRM probe
+            # calls drm_aperture_remove_conflicting_pci_framebuffers() to evict
+            # the framebuffer owner. On amd64 that evicts efifb, a placeholder,
+            # and vgapci0 survives. On arm64 vtgpu IS the only console -- no EFI
+            # GOP for vt_efifb -- so it evicts the console itself and vt(4)
+            # faults writing to the dead device:
+            #
+            #   VT: Switching back from "virtio_gpu" to "virtio_gpu".
+            #   vtgpu0: detached
+            #   panic: data abort in critical section or under mutex
+            #   esr 0x96000047 (write, translation fault L3), Uptime: 11s
+            #
+            # Restore the bundle when #170 lands.
+            mkdir -p art/gk
+            tar -C art/gk -xzf art/graphics-kexts-arm64.tar.gz
+            rm -rf art/gk/VirtIOGraphics.kext
+            tar -C art/gk -czf art/graphics-kexts-arm64.tar.gz .
+            rm -rf art/gk
+          fi
           export MODULES_TGZ="$(ls art/*kext*.tar.gz 2>/dev/null | tr '\n' ' ')"
+          echo "kexts for ${ARCH}: ${MODULES_TGZ:-<none>}"
           # pkg-free /etc seed: fetch nextbsd-overlays via the API (no git needed
           # in the container) so the stripped userland package's missing /etc is
           # seeded, exactly like nextbsd/build.sh does for the real image.
