@@ -815,19 +815,17 @@ log_message(int priority, const char *str, ...)
 bool
 has_entitlement(audit_token_t audit, const char *entitlement)
 {
-	xpc_object_t edata;
+	/*
+	 * Always false on FreeBSD (nextbsd-userland#144) -- see the note in
+	 * notify_client.c:check_entitlement. libxpc's
+	 * xpc_copy_entitlement_for_token() returns NULL unconditionally, so this
+	 * already always returned false; the xpc_bool_get_value() arm was dead.
+	 */
 	bool result = false;
 
 	pid_t pid = audit_token_to_pid(audit);
 
 	log_message(ASL_LEVEL_NOTICE, "-> has_root_entitlement (PID %d)\n", pid);
-
-	edata = xpc_copy_entitlement_for_token(entitlement, &audit);
-
-	if(edata != NULL){
-		result = xpc_bool_get_value(edata);
-		xpc_release(edata);
-	}
 
 	log_message(ASL_LEVEL_NOTICE, "<- has_root_entitlement (PID %d) = %s\n", pid, result ? "OK" : "FAIL");
 	return result;
@@ -1485,30 +1483,21 @@ main(int argc, const char *argv[])
 	if (notifyd_trace_on()) fprintf(stderr, "notifyd[%d]: CP11 channels connected, now serving "
 	    "server_port=0x%x\n", getpid(), global.server_port); fflush(stderr);
 
-	xpc_event_publisher_t publisher = xpc_event_publisher_create("com.apple.notifyd.matching", global.workloop);
-	global.notify_state.event_publisher = publisher;
-	xpc_event_publisher_set_handler(publisher,
-			^(xpc_event_publisher_action_t action, uint64_t event_token, xpc_object_t descriptor) {
-				switch (action) {
-				case XPC_EVENT_PUBLISHER_ACTION_ADD:
-					notifyd_matching_register(event_token, descriptor);
-					break;
-				case XPC_EVENT_PUBLISHER_ACTION_REMOVE:
-					notifyd_matching_unregister(event_token);
-					break;
-				case XPC_EVENT_PUBLISHER_ACTION_INITIAL_BARRIER:
-					/* Channels are connected unconditionally at creation (above),
-					 * since this libxpc no-ops the event publisher so this barrier
-					 * never fires. If a real xpc_event_publisher is implemented
-					 * later, drop the unconditional connects to avoid a double-connect. */
-					break;
-				}
-			});
-	xpc_event_publisher_set_error_handler(publisher, ^(int error) {
-		NOTIFY_INTERNAL_CRASH(error, "Event publisher error");
-	});
-	xpc_event_publisher_set_throttling(publisher, INFLIGHT_XPC_EVENT_HARD_LIMIT);
-	xpc_event_publisher_activate(publisher);
+	/*
+	 * The XPC event publisher block was removed here (#144).
+	 *
+	 * Every function it used is a no-op macro in libxpc/xpc/private.h:60-68 --
+	 * xpc_event_publisher_create expands to NULL, set_handler and activate to
+	 * (void)0 -- so the publisher was always NULL and the handler block was
+	 * never even stored. Nothing could reach notifyd_matching_register(), so
+	 * no client could ever acquire NOTIFY_TYPE_XPC_EVENT and event_table
+	 * stayed permanently empty.
+	 *
+	 * Note for anyone restoring a real publisher: the Mach channels above are
+	 * connected unconditionally, which was a workaround for
+	 * XPC_EVENT_PUBLISHER_ACTION_INITIAL_BARRIER never firing. Drop the
+	 * unconditional connects at the same time to avoid a double-connect.
+	 */
 
 	/* Set up SIGUSR1 */
 	global.sig_usr1_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL,

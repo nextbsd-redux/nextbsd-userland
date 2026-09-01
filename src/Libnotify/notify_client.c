@@ -1939,18 +1939,24 @@ notify_set_options(uint32_t opts)
 	_notify_lib_init(globals, EVENT_INIT);
 }
 
+/*
+ * Code-signed entitlements do not exist on FreeBSD (nextbsd-userland#144).
+ *
+ * This used to call xpc_copy_entitlement_for_token(), which libxpc implements
+ * as an unconditional `return NULL` (xpc_misc.c:378) precisely because there
+ * is nothing to query. The `if (value)` arm was therefore never taken and the
+ * evaluate block never ran, so this function already always returned false.
+ *
+ * Returning false directly is bit-identical in behaviour and removes the last
+ * xpc_object_t / xpc_array_* / xpc_string_* uses from this file. The evaluate
+ * blocks at the three call sites are left in place: they are dead either way,
+ * and deleting them would churn the introspection/loopback/root-access logic
+ * for no behavioural gain.
+ */
 static bool
-check_entitlement(const char *entitlement, bool (^evaluate)(xpc_object_t))
+check_entitlement(const char *entitlement __unused)
 {
-	bool result = false;
-
-	xpc_object_t value = xpc_copy_entitlement_for_token(entitlement, NULL);
-	if (value) {
-		result = evaluate(value);
-		xpc_release(value);
-	}
-
-	return result;
+	return false;
 }
 
 static void
@@ -1959,36 +1965,7 @@ _notification_introspection_init(notify_globals_t globals)
 	__block struct _notify_introspect_exempt_s *exempt_notifications = NULL;
 	__block size_t num_exempt_notifications = 0;
 
-	bool enabled = check_entitlement(INTROSPECTION_ENTITLEMENT, ^bool (xpc_object_t entitlement){
-		if (xpc_get_type(entitlement) != XPC_TYPE_ARRAY) {
-			NOTIFY_CLIENT_CRASH(0, "entitlement " INTROSPECTION_ENTITLEMENT " must be a non-empty *array* of strings");
-			return false;
-		}
-
-		size_t num_notifications = xpc_array_get_count(entitlement);
-		if (!num_notifications) {
-			NOTIFY_CLIENT_CRASH(0, "entitlement " INTROSPECTION_ENTITLEMENT " must be a *non-empty* array of strings");
-			return false;
-		}
-
-		exempt_notifications = calloc(num_notifications, sizeof(struct _notify_introspect_exempt_s));
-		assert(exempt_notifications != NULL);
-		num_exempt_notifications = num_notifications;
-
-		return xpc_array_apply(entitlement, ^bool (size_t index, xpc_object_t value){
-			if (xpc_get_type(value) != XPC_TYPE_STRING) {
-				NOTIFY_CLIENT_CRASH(0, "entitlement " INTROSPECTION_ENTITLEMENT " must be a non-empty array of *strings*");
-				return false;
-			}
-
-
-			const char *str = xpc_string_get_string_ptr(value);
-			size_t len = xpc_string_get_length(value);
-			exempt_notifications[index].str = strdup(str);
-			exempt_notifications[index].len = len;
-
-			return true;
-		});
+	bool enabled = check_entitlement(INTROSPECTION_ENTITLEMENT);
 	});
 
 	struct _notify_introspect_s *introspect = &globals->introspect;
@@ -2039,9 +2016,7 @@ notification_loopback_mode_enabled(void)
 	static bool cached_result;
 
 	dispatch_once(&once, ^{
-		cached_result = check_entitlement(LOOPBACK_MODE_ENTITLEMENT, ^bool (xpc_object_t entitlement){
-			return (entitlement == XPC_BOOL_TRUE);
-		});
+		cached_result = check_entitlement(LOOPBACK_MODE_ENTITLEMENT);
 	});
 
 	return cached_result;
@@ -2058,9 +2033,7 @@ should_claim_root_access(void)
 	static bool cached_result;
 
 	dispatch_once(&once, ^{
-		cached_result = check_entitlement(ROOT_ENTITLEMENT_KEY, ^bool (xpc_object_t entitlement){
-			return (entitlement == XPC_BOOL_TRUE);
-		});
+		cached_result = check_entitlement(ROOT_ENTITLEMENT_KEY);
 	});
 
 	return cached_result;

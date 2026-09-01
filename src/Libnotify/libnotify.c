@@ -540,42 +540,16 @@ _internal_send(notify_state_t *ns, client_t *c,
 		}
 
 		case NOTIFY_TYPE_XPC_EVENT:
-		{
-			xpc_object_t payload = xpc_dictionary_create(NULL, NULL, 0);
-			xpc_dictionary_set_string(payload, NOTIFY_XPC_EVENT_PAYLOAD_KEY_NAME, c->name_info->name);
-
-			name_info_t *n = _nc_table_find_64(&ns->name_id_table, c->name_info->name_id);
-			if (n != NULL) {
-				xpc_dictionary_set_uint64(payload, NOTIFY_XPC_EVENT_PAYLOAD_KEY_STATE, n->state);
-			}
-
-			int rc = xpc_event_publisher_fire_noboost(ns->event_publisher, c->deliver.event_token, payload);
-			xpc_release(payload);
-			if (rc != 0) {
-				if (rc == ENOBUFS) {
-					if (!c->simulated_crash) {
-						c->simulated_crash = true;
-
-						event_name_t service_name;
-						if (xpc_get_service_identifier_for_token(c->deliver.event_token, service_name)) {
-							simulate_crash("BUG IN CLIENT OF NOTIFYD: %s has not dequeued the last %d messages", service_name, INFLIGHT_XPC_EVENT_SOFT_LIMIT);
-						}
-					}
-
-					c->state_and_type |= NOTIFY_CLIENT_STATE_THROTTLED;
-					return NOTIFY_STATUS_TOKEN_BACKPRESSURE;
-				} else {
-					return NOTIFY_STATUS_TOKEN_FIRE_FAILED;
-				}
-			}
-
-			c->state_and_type &= ~NOTIFY_CLIENT_STATE_THROTTLED;
-			c->state_and_type &= ~NOTIFY_CLIENT_STATE_PENDING;
-			c->state_and_type &= ~NOTIFY_CLIENT_STATE_TIMEOUT;
-
-			return NOTIFY_STATUS_OK;
-		}
-
+			/*
+			 * Unreachable (nextbsd-userland#144). The only path that
+			 * could set this type was notifyd_matching_register(), called
+			 * from the XPC event-publisher handler -- and libxpc no-ops
+			 * the entire publisher API, so the handler was never stored
+			 * and no client could acquire this type. The delivery body
+			 * (xpc_dictionary_create + xpc_event_publisher_fire_noboost)
+			 * is removed with it.
+			 */
+			break;
 		case NOTIFY_TYPE_COMMON_PORT:
 		{
 			if (!proc_data || !proc_data->common_port_data)
