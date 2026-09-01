@@ -170,7 +170,6 @@ void free_string_list(char **l);
 char *get_line_from_file(FILE *f);
 char *next_word_from_string(char **s);
 size_t asl_str_to_size(char *s);
-asl_msg_t *xpc_object_to_asl_msg(xpc_object_t xobj);
 
 int asl_check_option(asl_msg_t *msg, const char *opt);
 
