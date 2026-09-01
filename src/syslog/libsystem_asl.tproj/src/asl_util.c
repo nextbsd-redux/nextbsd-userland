@@ -33,8 +33,6 @@
 #include <Block.h>
 #include <dispatch/dispatch.h>
 #include <os/assumes.h>
-#include <xpc/xpc.h>
-#include <xpc/connection.h>	/* xpc_connection_* */
 #include <syslog.h>
 #include <asl_core.h>
 #include <asl_private.h>
@@ -316,53 +314,24 @@ asl_syslog_faciliy_num_to_name(int n)
 int
 asl_trigger_aslmanager(void)
 {
-	xpc_connection_t conn;
-	xpc_object_t msg, reply;
-
 	/*
-	 * Poke the aslmanager Mach service so launchd demand-launches it and
-	 * the ASL store is expired.
+	 * No-op (nextbsd-userland#143).
 	 *
-	 * This matches Apple. Checked against a real Mac: libsystem_asl.dylib
-	 * imports xpc_connection_create_mach_service, xpc_connection_resume and
-	 * xpc_connection_send_message_with_reply_sync, so the sync XPC form is
-	 * the shipping design -- not a direct Mach send. (ASL's *logging* path
-	 * is separate and is MIG over mach_msg: libsystem_asl exports
-	 * __asl_server_message and friends against the asl_ipc subsystem. Only
-	 * this advisory trigger uses XPC.)
+	 * This performed a SYNCHRONOUS XPC round-trip to aslmanager, a service
+	 * launchd demand-launched. When aslmanager did not answer it waited
+	 * XPC_SYNC_REPLY_TIMEOUT_NSEC -- 30 seconds -- and syslogd reaches this
+	 * from write_boot_log() before it binds /var/run/log, so the system had
+	 * no logging at all for the duration (#87).
 	 *
-	 * It was a no-op here because two libxpc defects made it unusable, both
-	 * now fixed:
+	 * aslmanager is now driven by StartInterval in its plist rather than by
+	 * this trigger, matching the pre-XPC design. The comment this replaces
+	 * already noted that "the periodic job remains as a timer backstop" --
+	 * that backstop is now the only mechanism, which is the point.
 	 *
-	 *   - xpc_connection_resume() dereferenced dispatch_source_create()'s
-	 *     result without checking it. That returns NULL on bad input
-	 *     (DISPATCH_BAD_INPUT is plain NULL), so a connection whose local
-	 *     port was not established SIGSEGV'd the caller -- syslogd exited
-	 *     139 the moment this function was restored.
-	 *   - the sync wait used DISPATCH_TIME_FOREVER while a failed send left
-	 *     its pending call queued, so an undeliverable message hung the
-	 *     caller instead of failing it.
-	 *
-	 * Advisory: a failed trigger only defers rotation, so every error path
-	 * returns success. The periodic job remains as a timer backstop.
+	 * Advisory by contract: every error path here always returned success,
+	 * so callers cannot distinguish a no-op from a delivered trigger. The
+	 * only cost of not triggering is that store rotation happens on the next
+	 * interval instead of immediately.
 	 */
-	conn = xpc_connection_create_mach_service(ASLMANAGER_SERVICE_NAME,
-	    NULL, 0);
-	if (conn == NULL)
-		return 0;
-
-	msg = xpc_dictionary_create(NULL, NULL, 0);
-	if (msg == NULL) {
-		xpc_release(conn);
-		return 0;
-	}
-
-	xpc_connection_resume(conn);
-	reply = xpc_connection_send_message_with_reply_sync(conn, msg);
-
-	if (reply != NULL)
-		xpc_release(reply);
-	xpc_release(msg);
-	xpc_release(conn);
 	return 0;
 }

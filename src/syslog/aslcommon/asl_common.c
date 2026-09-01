@@ -103,108 +103,22 @@ _asl_trace_open(const char *path)
 		return NULL;
 	return fopen(path, "a");
 }
-asl_msg_t *
-xpc_object_to_asl_msg(xpc_object_t xobj)
-{
-	__block asl_msg_t *out;
 
-	if (xobj == NULL) return NULL;
-	if (xpc_get_type(xobj) != XPC_TYPE_DICTIONARY) return NULL;
-
-	out = asl_msg_new(ASL_TYPE_MSG);
-	xpc_dictionary_apply(xobj, ^bool(const char *key, xpc_object_t xval) {
-		char tmp[64];
-
-		if (xpc_get_type(xval) == XPC_TYPE_NULL)
-		{
-			asl_msg_set_key_val_op(out, key, NULL, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_BOOL)
-		{
-			if (xpc_bool_get_value(xval)) asl_msg_set_key_val_op(out, key, "1", 0);
-			else asl_msg_set_key_val_op(out, key, "0", 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_INT64)
-		{
-			snprintf(tmp, sizeof(tmp), "%lld", xpc_int64_get_value(xval));
-			asl_msg_set_key_val_op(out, key, tmp, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_UINT64)
-		{
-			snprintf(tmp, sizeof(tmp), "%llu", xpc_uint64_get_value(xval));
-			asl_msg_set_key_val_op(out, key, tmp, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_DOUBLE)
-		{
-			snprintf(tmp, sizeof(tmp), "%f", xpc_double_get_value(xval));
-			asl_msg_set_key_val_op(out, key, tmp, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_DATE)
-		{
-			snprintf(tmp, sizeof(tmp), "%lld", xpc_date_get_value(xval));
-			asl_msg_set_key_val_op(out, key, tmp, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_DATA)
-		{
-			size_t len = xpc_data_get_length(xval);
-			char *encoded = asl_core_encode_buffer(xpc_data_get_bytes_ptr(xval), len);
-			asl_msg_set_key_val_op(out, key, encoded, 0);
-			free(encoded);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_STRING)
-		{
-			asl_msg_set_key_val_op(out, key, xpc_string_get_string_ptr(xval), 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_UUID)
-		{
-			uuid_string_t us;
-			uuid_unparse(xpc_uuid_get_bytes(xval), us);
-			asl_msg_set_key_val_op(out, key, us, 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_FD)
-		{
-			/* XPC_TYPE_FD is not supported */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_FD}", 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_SHMEM)
-		{
-			/* XPC_TYPE_SHMEM is not supported */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_SHMEM}", 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_ARRAY)
-		{
-			/* XPC_TYPE_ARRAY is not supported */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_ARRAY}", 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_DICTIONARY)
-		{
-			/* XPC_TYPE_DICTIONARY is not supported */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_DICTIONARY}", 0);
-		}
-		else if (xpc_get_type(xval) == XPC_TYPE_ERROR)
-		{
-			/* XPC_TYPE_ERROR is not supported */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_ERROR}", 0);
-		}
-		else
-		{
-			/* UNKNOWN TYPE */
-			asl_msg_set_key_val_op(out, key, "{XPC_TYPE_???}", 0);
-		}
-
-		return true;
-	});
-
-	return out;
-}
 
 asl_msg_t *
 configuration_profile_to_asl_msg(const char *ident)
 {
-	xpc_object_t xobj = configuration_profile_copy_property_list(ident);
-	asl_msg_t *out = xpc_object_to_asl_msg(xobj);
-	if (xobj != NULL) xpc_release(xobj);
-	return out;
+	/*
+	 * MDM configuration profiles do not exist on FreeBSD
+	 * (nextbsd-userland#143). The FreeBSD shim
+	 * configuration_profile_copy_property_list() returns NULL
+	 * unconditionally (freebsd-shims/configuration_profile.h:17), so this
+	 * function already returned NULL on its first guard. The XPC-object
+	 * converter it used, xpc_object_to_asl_msg(), had no other caller and
+	 * is deleted with it.
+	 */
+	(void)ident;
+	return NULL;
 }
 
 /* strdup + skip leading and trailing whitespace */
