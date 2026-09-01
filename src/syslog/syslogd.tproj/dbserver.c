@@ -102,6 +102,12 @@ typedef union
 	union __ReplyUnion__asl_ipc_subsystem reply;
 } asl_reply_msg;
 
+#define _DBSM(...) do { \
+	fprintf(stderr, "[%d] dbsm: ", getpid()); \
+	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); \
+	fflush(stderr); \
+} while(0)
+
 static void
 db_asl_open(uint32_t dbtype)
 {
@@ -139,7 +145,9 @@ db_asl_open(uint32_t dbtype)
 			}
 		}
 
+		_DBSM("  db_asl_open: before asl_store_open_write");
 		status = asl_store_open_write(NULL, &(global.file_db));
+		_DBSM("  db_asl_open: after asl_store_open_write status=%u", status);
 		if (status != ASL_STATUS_OK)
 		{
 			asldebug("asl_store_open_write: %s\n", asl_core_error(status));
@@ -147,7 +155,14 @@ db_asl_open(uint32_t dbtype)
 		else
 		{
 			if (global.db_file_max != 0) asl_store_max_file_size(global.file_db, global.db_file_max);
+			/*
+			 * #87: this is a SYNCHRONOUS, untimed XPC round-trip
+			 * (asl_util.c:361) to a launchd demand-launched service,
+			 * on the boot path, before /var/run/log exists.
+			 */
+			_DBSM("  db_asl_open: before asl_trigger_aslmanager");
 			asl_trigger_aslmanager();
+			_DBSM("  db_asl_open: after asl_trigger_aslmanager");
 		}
 	}
 
@@ -491,11 +506,7 @@ db_save_message(asl_msg_t *msg)
  * The flush matters as much as the ungating: stderr here is a FILE, so stdio
  * full-buffers it and a hang leaves the tail of the trace unwritten.
  */
-#define _DBSM(...) do { \
-	fprintf(stderr, "[%d] dbsm: ", getpid()); \
-	fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); \
-	fflush(stderr); \
-} while(0)
+/* _DBSM defined above db_asl_open (#87). */
 
 	_DBSM("enter");
 
