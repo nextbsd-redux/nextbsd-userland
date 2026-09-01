@@ -36,6 +36,9 @@
 #include <syslog.h>
 #include <asl_core.h>
 #include <asl_private.h>
+#include <mach/mach.h>
+#include <servers/bootstrap.h>
+#include <asl_common.h>
 
 static uint8_t *b64charset = (uint8_t *)"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -311,27 +314,61 @@ asl_syslog_faciliy_num_to_name(int n)
 	return NULL;
 }
 
+/* Never block. The doorbell is advisory; a full queue means one is already
+ * pending and unanswered, which is a success for our purposes. */
+#define ASLMANAGER_SEND_TIMEOUT_MS 100
+
 int
 asl_trigger_aslmanager(void)
 {
+	mach_port_t port = MACH_PORT_NULL;
+	mach_msg_header_t msg;
+	kern_return_t kr;
+
 	/*
-	 * No-op (nextbsd-userland#143).
+	 * Ring aslmanager's doorbell over bare Mach (nextbsd-userland#143).
 	 *
-	 * This performed a SYNCHRONOUS XPC round-trip to aslmanager, a service
-	 * launchd demand-launched. When aslmanager did not answer it waited
-	 * XPC_SYNC_REPLY_TIMEOUT_NSEC -- 30 seconds -- and syslogd reaches this
-	 * from write_boot_log() before it binds /var/run/log, so the system had
-	 * no logging at all for the duration (#87).
+	 * Apple's version of this function did a SYNCHRONOUS XPC round-trip and
+	 * waited XPC_SYNC_REPLY_TIMEOUT_NSEC -- 30 seconds -- when aslmanager
+	 * did not answer. syslogd reaches this from db_asl_open() on the boot
+	 * path, BEFORE it binds /var/run/log, so a system with no logging at all
+	 * for 30s was the result (#87). #143 replaced the whole thing with
+	 * `return 0`, which fixed the stall by removing the feature: nothing
+	 * started aslmanager any more, and the ASL store was never trimmed.
 	 *
-	 * aslmanager is now driven by StartInterval in its plist rather than by
-	 * this trigger, matching the pre-XPC design. The comment this replaces
-	 * already noted that "the periodic job remains as a timer backstop" --
-	 * that backstop is now the only mechanism, which is the point.
+	 * What was actually wrong was the ENVELOPE, not the mechanism. launchd
+	 * demand-launches on a Mach message; XPC was only the wrapper Apple put
+	 * around that in 10.9. So send the message and nothing else:
 	 *
-	 * Advisory by contract: every error path here always returned success,
-	 * so callers cannot distinguish a no-op from a delivered trigger. The
-	 * only cost of not triggering is that store rotation happens on the next
-	 * interval instead of immediately.
+	 *   - one-way. No reply is wanted, so there is no semaphore to wait on
+	 *     and no 30s timeout to hit. The contract has always been advisory
+	 *     -- every error path below returns 0, and callers cannot tell a
+	 *     delivered trigger from an undelivered one.
+	 *   - MACH_SEND_TIMEOUT. Even a full queue cannot park syslogd here.
+	 *   - no libdispatch. xpc_connection_send_message() dispatch_async()es,
+	 *     and this is reached from syslogd's recv pthread, where our
+	 *     dispatch_async SIGSEGVs in dx_push (asl_action.c:1765). That is
+	 *     what killed syslogd in PR #139.
+	 *   - no libxpc, which keeps syslog off it for #152.
+	 *
+	 * aslmanager itself checks in for this service and stays resident,
+	 * exactly as Apple's managed path did (it ran dispatch_main() and never
+	 * returned) -- so the first trigger starts it and later ones are
+	 * serviced by the running process rather than launching a new one.
 	 */
+	kr = bootstrap_look_up(bootstrap_port, ASLMANAGER_SERVICE_NAME, &port);
+	if (kr != KERN_SUCCESS || port == MACH_PORT_NULL) return 0;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+	msg.msgh_size = sizeof(msg);
+	msg.msgh_remote_port = port;
+	msg.msgh_local_port = MACH_PORT_NULL;
+	msg.msgh_id = ASLMANAGER_TRIGGER_MSG_ID;
+
+	(void)mach_msg(&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof(msg), 0,
+	    MACH_PORT_NULL, ASLMANAGER_SEND_TIMEOUT_MS, MACH_PORT_NULL);
+
+	(void)mach_port_deallocate(mach_task_self(), port);
 	return 0;
 }

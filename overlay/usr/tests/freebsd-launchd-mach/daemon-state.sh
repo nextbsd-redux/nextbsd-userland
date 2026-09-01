@@ -30,10 +30,10 @@
 # "should be running" is not one rule:
 #
 #   KeepAlive=true / RunAtLoad=true  resident -- must have a live process
-#   MachServices, no KeepAlive       demand-launched -- must be LOADED, and
-#                                    must NOT be running (com.apple.aslmanager
-#                                    does its work and exits; a live one means
-#                                    it is stuck or respawn-looping)
+#   MachServices, in RESIDENT_DEMAND demand-launched but resident once started
+#                                    -- must be LOADED and RUNNING
+#   MachServices, otherwise          demand-launched -- must be loaded; running
+#                                    or not is not something we can judge
 #   StartInterval                    periodic -- must be loaded; may or may not
 #                                    be mid-run when we look
 #   Disabled=true                    skipped, deliberately off
@@ -128,6 +128,21 @@ plist_keys() {
     }' "$1"
 }
 
+# ------------------------------------------------------ residency table --
+# Whether a demand-launched job STAYS UP after servicing a request is a
+# property of the program, not of its plist -- there is no key that says it --
+# so the expectation has to be written down. This is that list, and it should
+# stay short, with a reason per entry.
+#
+#   com.apple.aslmanager  launchd demand-launches it once (syslogd's trigger
+#                         from db_asl_open at first store open) and it then
+#                         stays resident servicing later triggers. Apple's
+#                         managed path ran dispatch_main() and never returned;
+#                         ours blocks in mach_msg (aslmanager.c:run_managed).
+#                         macOS shows the same thing: aslmanager is up from
+#                         boot from a plist with no RunAtLoad/KeepAlive.
+RESIDENT_DEMAND="com.apple.aslmanager"
+
 # ------------------------------------------------------------- the check --
 fails=""
 checked=0
@@ -153,6 +168,13 @@ for plist in "$DAEMONS_DIR"/*.plist; do
     interval=$(getkey StartInterval)
 
     checked=$((checked + 1))
+
+    # Plain glob membership test — expr(1) would treat the label as a BRE, and
+    # every label here contains dots.
+    resident_demand=0
+    case " $RESIDENT_DEMAND " in
+    *" $label "*) resident_demand=1 ;;
+    esac
 
     if [ "$disabled" = "true" ]; then
         echo "    SKIP $label: Disabled=true in its plist"
@@ -188,15 +210,25 @@ for plist in "$DAEMONS_DIR"/*.plist; do
         # Conditional KeepAlive: whether it should be up right now depends on
         # runtime state we are not modelling. Report, do not judge.
         echo "    INFO $label: conditional KeepAlive (dict); loaded, pid=$pid — liveness not asserted"
-    elif [ -n "$machsvc" ] || [ -n "$interval" ]; then
-        # Demand-launched or periodic: it runs and exits, so "not running" is
-        # the healthy steady state. A live one is the interesting case --
-        # com.apple.aslmanager stuck, or respawn-looping because it exited
-        # without draining its service port.
+    elif [ -n "$machsvc" ] && [ "$resident_demand" -eq 1 ]; then
+        # Demand-launched, but expected resident once started. Something has to
+        # have triggered it -- for aslmanager that is syslogd at first store
+        # open -- so "never started" and "started and died" are both failures,
+        # and both are invisible to `launchctl list` on its own.
         if [ "$pid" = "-" ] || [ -z "$pid" ]; then
-            echo "    OK   $label: demand/periodic, loaded and idle (as expected)"
+            fails="$fails\n    $label: demand-launched and expected resident, but launchd holds no PID — it either was never triggered or died"
+        elif ! ps -p "$pid" >/dev/null 2>&1; then
+            fails="$fails\n    $label: launchd reports pid $pid but ps cannot see it — stale j->p"
         else
-            echo "    INFO $label: demand/periodic and currently running as pid $pid (mid-run, or stuck)"
+            echo "    OK   $label: demand-launched and resident, running as pid $pid"
+        fi
+    elif [ -n "$machsvc" ] || [ -n "$interval" ]; then
+        # Demand-launched or periodic with no residency expectation recorded.
+        # Loaded is all we can fairly assert.
+        if [ "$pid" = "-" ] || [ -z "$pid" ]; then
+            echo "    OK   $label: demand/periodic, loaded and idle"
+        else
+            echo "    OK   $label: demand/periodic, loaded and currently running as pid $pid"
         fi
     else
         echo "    INFO $label: loaded, but its plist declares no start policy (no KeepAlive/RunAtLoad/MachServices/StartInterval)"

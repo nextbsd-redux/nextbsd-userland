@@ -11,41 +11,50 @@
 		<string>aslmanager</string>
 	</array>
 	<!--
-	     DEMAND-LAUNCH PROBE (nextbsd-userland#143 follow-up).
+	     Apple's shipped plist, restored (nextbsd-userland#143, #164).
 
-	     #143 replaced MachServices with StartInterval 3600 and stubbed
-	     asl_trigger_aslmanager() to a no-op. StartInterval only arms an
-	     EVFILT_TIMER (core.c:2885) -- there is no dispatch at load -- so
-	     aslmanager does not run for the first hour of any boot, and the
-	     trigger that used to start it is gone. That is why it never runs.
+	     Verified against macOS 26 /System/Library/LaunchDaemons/
+	     com.apple.aslmanager.plist: MachServices + EnableTransactions +
+	     EnablePressuredExit + POSIXSpawnType Interactive, and nothing else.
+	     No RunAtLoad, no KeepAlive, no StartInterval -- yet `ps` on a Mac
+	     shows aslmanager resident from boot.
 
-	     This restores MachServices so launchd demand-launches the job, and
-	     exists to answer one question in CI: does on-demand Mach-service
-	     launch work now? When #143 removed it the answer was no, but the
-	     two stubs behind that (#79: mach_port_get_set_status and
-	     mach_port_get_attributes) were fixed by #83 on 08-29, and #78's
-	     syslogd deadlock on 08-31 -- all BEFORE #143 landed at 08-31 22:56.
-	     Nothing re-tested the path afterwards.
+	     That is not a contradiction. aslmanager is demand-launched ONCE, by
+	     syslogd's trigger from db_asl_open() at first store open, and then
+	     STAYS resident: Apple's managed path ran dispatch_main() and never
+	     returned. Our aslmanager does the same with a bare mach_msg receive
+	     loop instead (aslmanager.c:run_managed).
 
-	     The boot-path stall #87 describes is NOT reintroduced: the call
-	     site that caused it was removed separately by 3d3e575, 99 minutes
-	     before #143, and stays removed (dbserver.c:152).
+	     The two keys #164 called vestigial are the ones that make residency
+	     safe, and are restored with it:
 
-	     StandardErrorPath is the observable signal. launchd creates the
-	     file when it spawns the job, and `launchctl list` cannot be used
-	     for this -- job_export() (core.c:1095) always inserts
-	     LastExitStatus, so a job that never ran and a job that exited 0
-	     both print "-  0  com.apple.aslmanager".
+	       EnableTransactions   launchd will not kill the job mid-rotation
+	       EnablePressuredExit  launchd MAY reclaim it under memory pressure,
+	                            which is fine -- the next trigger brings it
+	                            straight back
 
-	     EnableTransactions / EnablePressuredExit are dropped: both were
-	     for the resident XPC listener that #143 deleted. aslmanager does
-	     the work and exits.
+	     StartInterval is deliberately NOT here. #143 added it as a
+	     substitute for the trigger, but it only arms an EVFILT_TIMER
+	     (core.c:2885) with no dispatch at load, so it did not start the job
+	     for the first hour of any boot -- and a clock is the wrong shape
+	     anyway: rotation is warranted by the store crossing a size or age
+	     bound, not by the hour.
+
+	     StandardErrorPath/StandardOutPath are ours, not Apple's: the boot
+	     suite reads this file for the ASLMANAGER-RESIDENT / -TRIGGERED
+	     markers. `launchctl list` cannot substitute -- job_export()
+	     (core.c:1095) always inserts LastExitStatus, so a job that never ran
+	     prints the same "-  0" as one that exited cleanly.
 	-->
 	<key>MachServices</key>
 	<dict>
 		<key>com.apple.aslmanager</key>
 		<true/>
 	</dict>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>EnablePressuredExit</key>
+	<true/>
 	<key>StandardErrorPath</key>
 	<string>/var/log/aslmanager.stderr</string>
 	<key>StandardOutPath</key>

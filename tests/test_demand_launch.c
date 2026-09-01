@@ -37,8 +37,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Arbitrary; the receiver ignores it. Kept out of the MIG range (0..999999)
- * so a stray message is obviously ours if it ever shows up in a trace. */
+/* Must match ASLMANAGER_TRIGGER_MSG_ID in aslcommon/asl_common.h, which is the
+ * value asl_trigger_aslmanager() sends. Duplicated rather than included because
+ * asl_common.h is an internal header and is not installed to /usr/include; the
+ * receiver ignores the id either way, so a drift here costs only the ability to
+ * recognise the message in a trace. */
 #define TRIGGER_MSG_ID	0x41534c4d	/* 'ASLM' */
 
 /* Never block. If the service port's queue is full the doorbell has already
