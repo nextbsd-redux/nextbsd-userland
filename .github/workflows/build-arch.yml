@@ -177,12 +177,12 @@ jobs:
           # x86-64 objects over arm64's, and arm64 kldload'd them with "Exec
           # format error". Filter by arch; take the unsuffixed x86-64 ones only
           # on amd64, where they are the correct architecture.
-          gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+          gh release download continuous -R nextbsd/nextbsd-kernel-extensions \
             --pattern "*kext*-${ARCH}.tar.gz" --dir art --clobber || true
           if [ "$ARCH" = amd64 ]; then
             for p in graphics-kexts.tar.gz intelethernet-kext.tar.gz \
                      intelwifi-kext.tar.gz nvidia-kexts.tar.gz; do
-              gh release download continuous -R nextbsd-redux/nextbsd-kernel-modules \
+              gh release download continuous -R nextbsd/nextbsd-kernel-extensions \
                 --pattern "$p" --dir art --clobber || true
             done
           elif [ -f art/graphics-kexts-arm64.tar.gz ]; then

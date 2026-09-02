@@ -150,7 +150,7 @@ fi
 # (0x24f38086) reaching the catalogue, the kernel matcher resolving that id,
 # kextd loading IntelWiFi on request, and IntelEthernet binding em0.
 #
-# nextbsd-kernel-modules publishes IntelWiFi and IntelEthernet as x86-64 builds
+# nextbsd-kernel-extensions publishes IntelWiFi and IntelEthernet as x86-64 builds
 # ONLY — there is no arm64 variant of either. So this group is amd64-only by
 # construction, twice over:
 #
