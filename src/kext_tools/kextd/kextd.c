@@ -142,6 +142,98 @@ parse_match(CFDictionaryRef d, uint32_t **out)
 	return (n);
 }
 
+/*
+ * Parse IONameMatch into a freshly malloc'd fixed-width string table
+ * (ncompat * IOCAT_COMPAT_MAX), which is what IOCATIOCADDCOMPAT expects.
+ *
+ * IONameMatch is Apple's key for matching a device-tree node, and on a real
+ * Darwin personality it is either a single string or an array of them. Both are
+ * accepted here for the same reason: a personality copied from a Darwin driver
+ * should work unchanged.
+ *
+ * Fixed width rather than packed so the kernel can bound each copyin without
+ * walking user memory looking for terminators -- see struct iocat_add_compat.
+ * Returns the count (0 on none/absent); *out is the table (caller frees).
+ */
+static uint32_t
+parse_name_match(CFDictionaryRef d, char **out)
+{
+	CFTypeRef v;
+	char *tbl;
+	uint32_t n = 0;
+
+	*out = NULL;
+	v = CFDictionaryGetValue(d, CFSTR("IONameMatch"));
+	if (v == NULL)
+		return (0);
+
+	tbl = calloc(IOCAT_MAX_MATCH, IOCAT_COMPAT_MAX);
+	if (tbl == NULL)
+		return (0);
+
+	if (CFGetTypeID(v) == CFStringGetTypeID()) {
+		if (CFStringGetCString((CFStringRef)v, tbl, IOCAT_COMPAT_MAX,
+		    kCFStringEncodingUTF8))
+			n = 1;
+	} else if (CFGetTypeID(v) == CFArrayGetTypeID()) {
+		CFArrayRef a = (CFArrayRef)v;
+		CFIndex i, cnt = CFArrayGetCount(a);
+
+		for (i = 0; i < cnt && n < IOCAT_MAX_MATCH; i++) {
+			CFStringRef e = CFArrayGetValueAtIndex(a, i);
+
+			if (e == NULL || CFGetTypeID(e) != CFStringGetTypeID())
+				continue;
+			if (CFStringGetCString(e, tbl + (size_t)n * IOCAT_COMPAT_MAX,
+			    IOCAT_COMPAT_MAX, kCFStringEncodingUTF8))
+				n++;
+		}
+	}
+	if (n == 0) {
+		free(tbl);
+		return (0);
+	}
+	*out = tbl;
+	return (n);
+}
+
+/*
+ * Push a device-tree personality (nextbsd-kernel-extensions#185).
+ *
+ * Separate from the PCI push because it uses a different ioctl and record --
+ * struct iocat_add is a kernel ABI shared with the in-kernel catalogue, so the
+ * device-tree case was added alongside it rather than by widening it.
+ */
+static int
+push_platform_personality(int fd, CFDictionaryRef p, const char *bundle_id)
+{
+	struct iocat_add_compat add;
+	char *tbl;
+	uint32_t n;
+	int rc;
+
+	n = parse_name_match(p, &tbl);
+	if (n == 0)
+		return (0);	/* no IONameMatch -> nothing to match on */
+
+	memset(&add, 0, sizeof(add));
+	strlcpy(add.bundle_id, bundle_id, sizeof(add.bundle_id));
+	add.probe_score = dict_int(p, CFSTR("IOProbeScore"), 0);
+	add.ncompat = n;
+	add.compat = (uint64_t)(uintptr_t)tbl;
+
+	rc = ioctl(fd, IOCATIOCADDCOMPAT, &add);
+	free(tbl);
+	if (rc != 0) {
+		warn("IOCATIOCADDCOMPAT %s", add.bundle_id);
+		return (-1);
+	}
+	if (verbose)
+		printf("kextd: pushed %s (IOPlatformDevice, score %d, %u name(s))\n",
+		    add.bundle_id, add.probe_score, n);
+	return (1);
+}
+
 /* Push one personality dict; returns 1 if pushed, 0 if skipped, -1 on error. */
 static int
 push_personality(int fd, CFDictionaryRef p)
@@ -160,6 +252,10 @@ push_personality(int fd, CFDictionaryRef p)
 	if (dict_string(p, CFSTR("IOProviderClass"), provider, sizeof(provider)) &&
 	    strcmp(provider, "IOPCIDevice") == 0)
 		add.provider_class = IOCAT_PROVIDER_IOPCIDEVICE;
+	else if (dict_string(p, CFSTR("IOProviderClass"), provider,
+	    sizeof(provider)) && strcmp(provider, "IOPlatformDevice") == 0)
+		/* Device tree: different record and ioctl entirely (#185). */
+		return (push_platform_personality(fd, p, add.bundle_id));
 	else
 		add.provider_class = IOCAT_PROVIDER_UNKNOWN;
 
